@@ -1,0 +1,19 @@
+[Unit]
+Description=yuncs OKX ETH 挑战赛机器人
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/yuncs
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/%i/.local/bin/uv run --frozen python -m app.run
+Restart=always
+RestartSec=5
+# 内存保护（2C1G VPS）
+MemoryMax=512M
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

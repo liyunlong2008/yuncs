@@ -1,0 +1,16 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# 运行数据与密钥（VPS 部署时 secrets.toml 单独上传）
+secrets.toml
+data/
+logs/
+*.log

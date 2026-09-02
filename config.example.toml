@@ -1,0 +1,47 @@
+# ============ 挑战规则（10u 战神玩法：翻倍目标 + 回撤出局，不限时） ============
+[challenge]
+initial_balance = 20        # 初始资金 USDT（20u 以内）
+target_multiple = 2.0       # 目标倍数：权益达到初始资金×该值即挑战成功（2 = 翻倍）
+max_drawdown_pct = 30       # 回撤出局：权益从峰值回撤该百分比即平仓停止
+duration_hours = 0          # 可选时长上限；0 = 不限时
+timeframe = "1m"            # 策略 K 线周期（1m/5m/15m）
+
+# ============ 交易所 ============
+[exchange]
+symbol = "ETH/USDT:USDT"    # ccxt 符号（OKX ETH 永续）
+mode = "paper"              # paper=纸盘(本地撮合) | live=实盘(真实下单)
+feed = "auto"               # ws=WebSocket | rest=REST轮询 | auto=先WS收不到行情自动降级REST（本地代理推荐auto）
+proxy = "http://127.0.0.1:10808"  # 开发机走本地代理；VPS 直连请留空 ""
+fetch_fees_from_okx = true  # 启动时从 OKX 拉取实际费率（需 API key），失败则用默认 0.05%/0.02%
+taker_fee = 0.0005          # 默认费率（仅当 fetch_fees_from_okx=false 或拉取失败时使用）
+maker_fee = 0.0002
+
+# ============ 风控 ============
+[risk]
+leverage = 10               # 开仓杠杆（OKX ETH-USDT-SWAP 最大 100x，isolated 第 1 档 IMR 1%）
+margin_per_trade = 5        # 单笔占用保证金 USDT
+max_notional = 1000         # 单仓名义价值上限 USDT（20u 账户的保护线）
+slippage_bps = 1.0          # 回测/纸盘市价单滑点（bps），纸盘实际成交价以盘口深度为准
+liquidation_buffer = 0.05   # 强平价缓冲（5%，即达到强平价前强制离场，防误差）
+
+# ============ 策略 ============
+[strategy]
+name = "trend_ema"
+[strategy.params]
+ema_fast = 5
+ema_slow = 20
+atr_period = 14
+atr_sl_mult = 2.0           # 止损 = ATR × 该倍数
+tp_ratio = 2.0              # 止盈 = 止损距离 × 该倍数（盈亏比）
+
+# ============ 存储与日志 ============
+[storage]
+db_path = "data/bot.db"
+
+[log]
+level = "INFO"
+
+# ============ API ============
+[api]
+host = "127.0.0.1"          # 看板只绑本机；对外用 nginx/caddy 反代 + Basic Auth
+port = 8000

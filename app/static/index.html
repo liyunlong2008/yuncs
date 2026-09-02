@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ETH 挑战赛看板</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+  :root { --bg:#0f1420; --card:#1a2130; --line:#2a3450; --tx:#dbe4f5; --dim:#8fa0bf; --green:#22c55e; --red:#ef4444; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--tx); font:14px/1.6 "PingFang SC","Microsoft YaHei",monospace; padding:16px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; min-width:220px; flex:1; }
+  .card h3 { font-size:13px; color:var(--dim); font-weight:600; margin-bottom:8px; }
+  .big { font-size:26px; font-weight:700; }
+  .dim { color:var(--dim); font-size:12px; }
+  .green { color:var(--green); } .red { color:var(--red); }
+  .bar { background:#0d1322; border-radius:6px; height:14px; overflow:hidden; margin-top:8px; }
+  .bar>div { height:100%; background:linear-gradient(90deg,#2563eb,#22c55e); transition:width .4s; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { padding:6px 8px; text-align:right; border-bottom:1px solid var(--line); }
+  th:first-child,td:first-child { text-align:left; }
+  #chart { height:280px; }
+  .tag { display:inline-block; padding:2px 10px; border-radius:20px; font-size:12px; }
+  .tag.running { background:#1e3a5f; color:#7dd3fc; }
+  .tag.won { background:#14532d; color:#86efac; }
+  .tag.lost { background:#7f1d1d; color:#fca5a5; }
+  .tag.timeout { background:#713f12; color:#fcd34d; }
+</style>
+</head>
+<body>
+<div class="row">
+  <div class="card">
+    <h3>状态</h3>
+    <div id="mode" class="dim">加载中…</div>
+    <div class="big" id="price">-</div>
+    <div class="dim" id="subprice">bid/ask · funding</div>
+  </div>
+  <div class="card">
+    <h3>挑战进度（10u 战神）</h3>
+    <div><span id="status" class="tag running">running</span> <span id="result" class="dim"></span></div>
+    <div class="big" id="equity">-</div>
+    <div class="dim" id="challenge_info">-</div>
+    <div class="bar"><div id="progress" style="width:0%"></div></div>
+  </div>
+  <div class="card">
+    <h3>持仓（USDT 口径）</h3>
+    <div class="big" id="pos_side">空仓</div>
+    <div class="dim" id="pos_info">-</div>
+    <div class="dim" id="pos_cost">-</div>
+  </div>
+  <div class="card">
+    <h3>钱包</h3>
+    <div class="big" id="balance">-</div>
+    <div class="dim" id="wallet_info">-</div>
+  </div>
+</div>
+
+<div class="row" style="margin-top:12px">
+  <div class="card" style="flex:2"><h3>权益曲线</h3><div id="chart"></div></div>
+</div>
+
+<div class="card" style="margin-top:12px">
+  <h3>最近成交</h3>
+  <table id="trades"><tr><th>时间</th><th>方向</th><th>数量(ETH)</th><th>开仓价</th><th>平仓价</th><th>盈亏</th><th>原因</th></tr></table>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let chart = null;
+const fmt = (v, d=2) => v == null ? '-' : Number(v).toFixed(d);
+const fmtTime = ts => new Date(ts * 1000).toLocaleString('zh-CN', {hour12:false});
+
+function render(s) {
+  if (!s) return;
+  $('mode').textContent = '模式: ' + (s.mode || '?');
+  $('price').textContent = fmt(s.price, 2);
+  $('subprice').textContent = `bid ${fmt(s.bid)} / ask ${fmt(s.ask)} · funding ${(s.funding_rate*100).toFixed(4)}%`;
+
+  const c = s.challenge || {};
+  $('status').textContent = c.status || 'running';
+  $('status').className = 'tag ' + (c.status || 'running');
+  $('result').textContent = c.result || '';
+  $('equity').textContent = fmt(c.equity, 4);
+  $('challenge_info').textContent =
+    `初始 ${fmt(c.initial_balance)} → 目标 ${fmt(c.target_equity)} ×${c.target_multiple} · ` +
+    `峰值 ${fmt(c.peak_equity)} · 回撤 ${c.drawdown_pct}%/${c.max_drawdown_pct}% · ` +
+    `剩余 ${c.remaining_sec ? Math.round(c.remaining_sec/60) + ' 分' : '不限时'}`;
+  $('progress').style.width = (c.progress_pct || 0) + '%';
+
+  const p = s.position || {};
+  $('pos_side').textContent = p.side === 'flat' || !p.side ? '空仓' : (p.side === 'long' ? '多仓 ▲' : '空仓 ▼');
+  $('pos_side').className = 'big ' + (p.side === 'long' ? 'green' : p.side === 'short' ? 'red' : '');
+  $('pos_info').textContent = p.size_eth
+    ? `数量 ${fmt(p.size_eth,4)} ETH · 名义 ${fmt(p.notional_usdt)} U · 成本价 ${fmt(p.cost_price)} · 强平价 ${fmt(p.liq_px)}`
+    : '-';
+  $('pos_cost').textContent = p.size_eth
+    ? `保证金 ${fmt(p.margin_usdt,4)} U · 成本 ${fmt(p.cost_usdt,4)} U · 未实现 ${fmt(p.unrealized_pnl,4)} U · 可买 ${fmt(s.buyable_usdt)} U`
+    : `可买 ${fmt(s.buyable_usdt)} U`;
+
+  const w = s.wallet || {};
+  $('balance').textContent = w.balance != null ? fmt(w.balance, 4) : '-';
+  $('wallet_info').textContent = w.balance != null
+    ? `初始 ${fmt(w.initial_balance)} · 保证金 ${fmt(w.margin_locked,4)} · 已实现 ${fmt(w.realized_pnl,4)} · 费用 ${fmt(w.fees_paid,4)} · 资金费 ${fmt(w.funding_paid,4)}`
+    : '-';
+
+  // 图表：合并实时快照进权益曲线
+  if (chart) {
+    chart.setOption({series:[{data: [...chart.getOption().series[0].data, [s.ts*1000, c.equity]]}]});
+  }
+}
+
+async function loadTrades() {
+  const rows = await (await fetch('/api/trades?limit=50')).json();
+  const tb = $('trades');
+  rows.forEach(t => {
+    const tr = document.createElement('tr');
+    const cls = t.pnl >= 0 ? 'green' : 'red';
+    tr.innerHTML = `<td>${fmtTime(t.ts)}</td><td>${t.side}</td><td>${fmt(t.size_eth,4)}</td>` +
+      `<td>${fmt(t.entry)}</td><td>${fmt(t.exit)}</td><td class="${cls}">${fmt(t.pnl,4)}</td><td>${t.reason}</td>`;
+    tb.appendChild(tr);
+  });
+}
+
+async function init() {
+  chart = echarts.init($('chart'));
+  const s0 = await (await fetch('/api/status')).json();
+  if (s0.equity) {
+    chart.setOption({
+      grid:{left:50,right:16,top:16,bottom:24},
+      xAxis:{type:'time'}, yAxis:{type:'value',scale:true},
+      tooltip:{trigger:'axis'},
+      series:[{name:'权益', type:'line', showSymbol:false, lineStyle:{width:2,color:'#22c55e'},
+               itemStyle:{color:'#22c55e'}, areaStyle:{color:'rgba(34,197,94,.12)'}, data:[]}]
+    });
+  }
+  loadTrades();
+  const ws = new WebSocket((location.protocol==='https:'?'wss://':'ws://') + location.host + '/ws');
+  ws.onmessage = e => render(JSON.parse(e.data));
+  render(s0);
+}
+init();
+</script>
+</body>
+</html>
