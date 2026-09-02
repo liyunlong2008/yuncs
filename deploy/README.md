@@ -1,5 +1,20 @@
 # VPS Ubuntu (2C1G 新加坡) 部署
 
+## 0. 一键部署（推荐）
+
+在全新 Ubuntu VPS（root）上一条命令完成：装 uv → 拉仓库 → 依赖+测试 → 生成纸盘配置 →
+可选填 OKX key → systemd 常驻 → 可选装 Caddy 看板（8765 + Basic Auth，密码交互设置）。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/liyunlong2008/yuncs/master/deploy/install.sh -o install.sh && bash install.sh
+```
+
+- 重复执行 = 拉最新代码并重启服务（配置和密钥保留不动）
+- 脚本会提示是否填 key / 是否装 Caddy，全部可回车跳过
+- 装完后：看板 `http://VPS_IP:8765`（记得安全组放行 8765）；日志 `journalctl -u yuncs -f`
+
+以下手动步骤供排障或自定义路径时使用（脚本做的事与 1~4 步等价）。
+
 ## 1. 安装依赖
 
 ```bash
