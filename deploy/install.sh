@@ -85,6 +85,13 @@ journalctl -u yuncs -n 5 --no-pager | sed 's/^/    /'
 # ---------- 7. Caddy 看板（可选） ----------
 read -rp "安装/更新 Caddy 看板（对外端口 $DASH_PORT + Basic Auth）？[Y/n] " yn
 if [ "$yn" != "n" ] && [ "$yn" != "N" ]; then
+    # 从 Caddy 官方源装最新版（Ubuntu 仓库的包太老，2.6 没有 basic_auth 指令）
+    if ! caddy --version 2>/dev/null | grep -qE '^v?2\.(1[0-9]|[89])'; then
+        apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https >/dev/null
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
+        apt-get update -qq
+    fi
     apt-get install -y -qq caddy >/dev/null
     while true; do
         read -srp "设置看板密码: " PW1; echo
