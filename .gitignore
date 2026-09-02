@@ -11,6 +11,8 @@ wheels/
 
 # 运行数据与密钥（VPS 部署时 secrets.toml 单独上传）
 secrets.toml
+# 本地运行时配置（每台机器不同），模板是 config.example.toml
+config.toml
 data/
 logs/
 *.log
