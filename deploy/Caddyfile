@@ -1,0 +1,17 @@
+# yuncs 看板反代（Caddy）：对外端口 8765，Basic Auth，内部 127.0.0.1:8000
+#
+# 部署：
+#   apt install -y caddy
+#   caddy hash-password        # 输入两次密码，把输出替换下面的 <密码哈希>
+#   cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   nano /etc/caddy/Caddyfile  # 替换 <密码哈希>；有域名把 :8765 换成 your.domain.com（自动 HTTPS）
+#   systemctl reload caddy
+#
+# 云防火墙/安全组放行 8765/tcp。
+
+:8765 {
+	basic_auth {
+		yuncs <密码哈希>
+	}
+	reverse_proxy 127.0.0.1:8000
+}

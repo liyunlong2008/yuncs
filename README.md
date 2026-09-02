@@ -78,12 +78,12 @@ app/
   store.py        SQLite（挑战轮次/成交/权益曲线）
   api.py           REST + WebSocket + 静态看板
 tests/            okx 计算方法/挑战规则/撮合/回测确定性
-deploy/           VPS 部署（systemd + nginx）
+deploy/           VPS 部署（systemd + caddy）
 ```
 
 ## 部署（VPS Ubuntu）
 
-见 `deploy/README.md`：`uv sync --frozen` + systemd 常驻 + nginx 反代看板（Basic Auth）。
+见 `deploy/README.md`：`uv sync --frozen` + systemd 常驻 + caddy 反代看板（Basic Auth，对外端口 8765）。
 
 ## 风险提示
 

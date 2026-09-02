@@ -74,8 +74,8 @@ store / api / static      持久化 / FastAPI / 看板
 ## 8. 实盘安全红线
 
 - 实盘模式：无 `secrets.toml` key 拒绝启动；改动实盘逻辑必须保留：启动预检、10s 对账、回撤自动全平、kill 双路停止
-- 看板只绑 `127.0.0.1`，公网必须走 `deploy/yuncs.nginx` 反代 + Basic Auth
-- 改配置/部署先读 `deploy/README.md`（systemd 模板单元 `yuncs@<user>`）
+- 看板只绑 `127.0.0.1:8000`，公网必须走 `deploy/Caddyfile`（Caddy 反代 + Basic Auth，对外端口 8765）；不得让应用直接监听公网
+- 改配置/部署先读 `deploy/README.md`（systemd 模板单元 `yuncs@<user>`；VPS 反代用 Caddy，不用 nginx）
 
 ## 9. 开发流程
 

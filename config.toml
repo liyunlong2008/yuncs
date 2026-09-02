@@ -43,5 +43,5 @@ level = "INFO"
 
 # ============ API ============
 [api]
-host = "127.0.0.1"          # 看板只绑本机；对外用 nginx/caddy 反代 + Basic Auth
+host = "127.0.0.1"          # 看板只绑本机；对外用 caddy 反代 + Basic Auth
 port = 8000

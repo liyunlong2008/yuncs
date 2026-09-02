@@ -18,7 +18,7 @@ cp config.example.toml config.toml
 #   [exchange] mode = "paper"（先纸盘验证）或 "live"
 #   [exchange] proxy = ""            # VPS 直连，不要填本地代理
 #   [exchange] feed = "auto"         # 直连会走 WebSocket
-#   [api] host = "127.0.0.1"         # 只绑本机，公网访问靠 nginx
+#   [api] host = "127.0.0.1"         # 只绑本机，公网访问靠 caddy 反代（8765）
 
 # secrets.toml 单独上传（不提交 git）：
 scp secrets.toml user@vps:~/yuncs/secrets.toml
@@ -40,18 +40,20 @@ sudo systemctl restart yuncs@$(whoami)        # 改配置后重启
 `yuncs@.service` 要点：模板单元以 `%i`（用户名）定位工作目录、`Restart=always`、
 `RestartSec=5`、日志走 journald + loguru 文件双通道、512M 内存上限。
 
-## 4. nginx 反代看板（带 Basic Auth）
+## 4. Caddy 反代看板（Basic Auth，对外端口 8765）
 
 ```bash
-sudo apt install -y nginx apache2-utils
-sudo htpasswd -c /etc/nginx/.htpasswd yuncs   # 设置看板密码
-sudo cp deploy/yuncs.nginx /etc/nginx/sites-available/yuncs
-sudo ln -s /etc/nginx/sites-available/yuncs /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
+sudo apt install -y caddy
+caddy hash-password            # 输入两次密码，复制输出的哈希
+sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+sudo nano /etc/caddy/Caddyfile # 把 <密码哈希> 替换为上一步输出
+sudo systemctl reload caddy
 ```
 
-> 看板默认只绑 127.0.0.1:8000，**不要裸奔公网**；域名在 `deploy/yuncs.nginx` 里替换。
-> 无域名可跳过 nginx，用 SSH 隧道本地看：`ssh -L 8000:127.0.0.1:8000 user@vps`
+- 看板访问：`http://VPS_IP:8765`，用户名 yuncs + 你设的密码
+- 云防火墙/安全组放行 8765/tcp；机器人本身始终只绑 127.0.0.1:8000，**不直接暴露**
+- 有域名时把 Caddyfile 的 `:8765` 换成 `your.domain.com`，Caddy 自动签发 HTTPS
+- 无域名不配 Caddy 也可用 SSH 隧道本地看：`ssh -L 8000:127.0.0.1:8000 user@vps`
 
 ## 5. 升级
 
