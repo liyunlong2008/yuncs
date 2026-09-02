@@ -92,6 +92,15 @@ class Store:
         cols = ["ts", "equity", "drawdown_pct", "challenge_status"]
         return [dict(zip(cols, r)) for r in rows]
 
+    async def fetch_runs(self, limit: int = 20) -> list[dict]:
+        cur = await self.conn.execute(
+            "SELECT id, mode, strategy, initial_balance, status, result, started, ended,"
+            " peak_equity, final_equity FROM runs ORDER BY id DESC LIMIT ?", (limit,))
+        rows = await cur.fetchall()
+        cols = ["id", "mode", "strategy", "initial_balance", "status", "result",
+                "started", "ended", "peak_equity", "final_equity"]
+        return [dict(zip(cols, r)) for r in rows]
+
     async def close(self) -> None:
         if self.conn:
             await self.conn.close()

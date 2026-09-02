@@ -1,0 +1,54 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "🟢 启动机器人（纸盘）",
+      "type": "process",
+      "command": "uv",
+      "args": ["run", "python", "-m", "app.run"],
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "🔴 启动机器人（实盘，需 secrets.toml）",
+      "type": "process",
+      "command": "uv",
+      "args": ["run", "python", "-m", "app.run", "--mode", "live"],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "📊 跑回测",
+      "type": "process",
+      "command": "uv",
+      "args": ["run", "python", "-m", "app.backtest_cli",
+               "--start", "${input:start}", "--end", "${input:end}",
+               "--timeframe", "${input:tf}"],
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "🧪 跑测试",
+      "type": "process",
+      "command": "uv",
+      "args": ["run", "pytest", "-q"],
+      "group": "test",
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "🔌 连接冒烟检查（WS/REST）",
+      "type": "process",
+      "command": "uv",
+      "args": ["run", "python", "scripts/smoke.py"],
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    { "id": "start", "type": "promptString", "description": "开始日期 YYYY-MM-DD", "default": "2026-07-28" },
+    { "id": "end", "type": "promptString", "description": "结束日期 YYYY-MM-DD", "default": "2026-09-02" },
+    { "id": "tf", "type": "promptString", "description": "K线周期（1m/5m/15m）", "default": "5m" }
+  ]
+}

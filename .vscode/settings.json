@@ -1,0 +1,6 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+  "files.encoding": "utf8",
+  "files.autoGuessEncoding": false,
+  "[python]": { "editor.tabSize": 4 }
+}

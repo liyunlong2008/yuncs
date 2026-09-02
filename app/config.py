@@ -32,7 +32,7 @@ class ExchangeConfig(BaseModel):
 
 
 class RiskConfig(BaseModel):
-    leverage: int = 10
+    leverage: int = 20       # 开仓杠杆（donchian+20u 推荐 20~50x；100x 下通道止损比强平价远，会先被强平）
     margin_per_trade: float = 5
     max_notional: float = 1000
     slippage_bps: float = 1.0
@@ -81,5 +81,6 @@ def load_config(config_path: str = "config.toml", secrets_path: str = "secrets.t
         data.update(tomllib.loads(p.read_text(encoding="utf-8")))
     sp = Path(secrets_path)
     if sp.exists():
-        data["secrets"] = tomllib.loads(sp.read_text(encoding="utf-8"))
+        # secrets.toml 结构为 [okx] 段，解开一层映射到 Secrets 字段
+        data["secrets"] = tomllib.loads(sp.read_text(encoding="utf-8")).get("okx", {})
     return Config(**data)

@@ -12,14 +12,14 @@ timeframe = "5m"             # 策略 K 线周期（donchian 建议 5m；1m 换�
 symbol = "ETH/USDT:USDT"    # ccxt 符号（OKX ETH 永续）
 mode = "paper"              # paper=纸盘(本地撮合) | live=实盘(真实下单)
 feed = "auto"               # ws=WebSocket | rest=REST轮询 | auto=先WS收不到行情自动降级REST（本地代理推荐auto）
-proxy = "http://127.0.0.1:10808"  # 开发机走本地代理（TUN 未生效前不要留空）；VPS 直连请留空 ""
+proxy = "http://127.0.0.1:10808"  # 开发机走本地代理；VPS 直连请留空 ""
 fetch_fees_from_okx = true  # 启动时从 OKX 拉取实际费率（需 API key），失败则用默认 0.05%/0.02%
 taker_fee = 0.0005          # 默认费率（仅当 fetch_fees_from_okx=false 或拉取失败时使用）
 maker_fee = 0.0002
 
 # ============ 风控 ============
 [risk]
-leverage = 10               # 开仓杠杆（OKX ETH-USDT-SWAP 最大 100x，isolated 第 1 档 IMR 1%）
+leverage = 20               # 开仓杠杆（donchian+20u 推荐 20~50x；100x 会先被强平，勿用）
 margin_per_trade = 5        # 单笔占用保证金 USDT
 max_notional = 1000         # 单仓名义价值上限 USDT（20u 账户的保护线）
 slippage_bps = 1.0          # 回测/纸盘市价单滑点（bps），纸盘实际成交价以盘口深度为准

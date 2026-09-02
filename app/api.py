@@ -40,6 +40,12 @@ def create_app(engine: Engine) -> FastAPI:
             return await engine.store.fetch_equity(engine.run_id, limit)
         return []
 
+    @app.get("/api/runs")
+    async def runs(limit: int = 20):
+        if engine.store.conn:
+            return await engine.store.fetch_runs(limit)
+        return []
+
     @app.get("/api/config")
     async def config():
         return engine.cfg.model_dump(exclude={"secrets"})

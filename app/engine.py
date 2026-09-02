@@ -283,6 +283,7 @@ class Engine:
         snap["ask"] = self.feed.ask
         snap["ts"] = time.time()
         snap["running"] = not self._stop_requested
+        snap["feed_mode"] = "rest" if self.feed._rest_mode else "ws"
         if self.wallet:
             snap["wallet"] = self.broker.wallet_view()
         return snap
