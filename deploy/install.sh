@@ -94,8 +94,16 @@ if [ "$yn" != "n" ] && [ "$yn" != "N" ]; then
     done
     HASH=$(caddy hash-password --plaintext "$PW1")
     sed "s|:8765|:$DASH_PORT|; s|<密码哈希>|$HASH|" deploy/Caddyfile > /etc/caddy/Caddyfile
+    # Caddy <2.8 的 Basic Auth 指令名是 basicauth（无下划线）
+    CADDY_MAJOR=$(caddy version | cut -d. -f1,2)
+    if [ "$(printf '%s\n' "2.8" "$CADDY_MAJOR" | sort -V | head -1)" = "2.8" ]; then
+        sed -i 's/basic_auth/basicauth/' /etc/caddy/Caddyfile
+    fi
     systemctl reload caddy 2>/dev/null || systemctl restart caddy
+    systemctl is-active --quiet caddy && log "caddy 运行中" || { warn "caddy 启动失败：journalctl -u caddy -n 20"; exit 1; }
     IP=$(curl -s -4 ifconfig.me || echo "<VPS_IP>")
+    log "看板: http://$IP:$DASH_PORT （用户名 yuncs）"
+    warn "记得在云安全组放行 $DASH_PORT/tcp"
     log "看板: http://$IP:$DASH_PORT （用户名 yuncs）"
     warn "记得在云安全组放行 $DASH_PORT/tcp"
 else

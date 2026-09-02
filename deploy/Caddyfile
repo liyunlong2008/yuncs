@@ -7,6 +7,8 @@
 #   nano /etc/caddy/Caddyfile  # 替换 <密码哈希>；有域名把 :8765 换成 your.domain.com（自动 HTTPS）
 #   systemctl reload caddy
 #
+# 注意：Caddy < 2.8 没有 basic_auth 指令，需改成 basicauth（install.sh 会自动处理）。
+#
 # 云防火墙/安全组放行 8765/tcp。
 
 :8765 {
