@@ -1,10 +1,38 @@
-"""历史数据下载（回测用）：K 线 CSV 缓存。"""
+"""历史数据下载（回测用）：按天分块的 K 线增量缓存。
+
+缓存文件 data/candles_{周期}_{YYYY-MM-DD}.csv，跑区间时逐天查缓存，
+只下载缺失的天 -> 重叠/滚动区间不重复下载。
+"""
 from __future__ import annotations
 
 import asyncio
 import csv
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+
+DAY_MS = 86_400_000
+
+
+def date_to_ms(day: str) -> int:
+    """YYYY-MM-DD -> UTC 当天 00:00 的 ms 时间戳。"""
+    return int(datetime.fromisoformat(day).replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+
+def iter_days(start: str, end: str) -> list[str]:
+    """闭区间 [start, end] 的所有日期（YYYY-MM-DD）。"""
+    d0, d1 = date.fromisoformat(start), date.fromisoformat(end)
+    if d1 < d0:
+        raise ValueError(f"end({end}) 需 >= start({start})")
+    out, d = [], d0
+    while d <= d1:
+        out.append(d.isoformat())
+        d += timedelta(days=1)
+    return out
+
+
+def day_cache_path(timeframe: str, day: str) -> Path:
+    return Path("data") / f"candles_{timeframe}_{day}.csv"
 
 
 async def download_candles(exchange, symbol: str, timeframe: str,

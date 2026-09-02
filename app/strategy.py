@@ -1,4 +1,4 @@
-"""策略框架：on_bar 决策 + 内置 trend_ema。
+"""策略框架：on_bar 决策 + 内置策略（trend_ema / donchian）。
 
 同一套策略代码跑 回测 / 纸盘 / 实盘。
 开仓即声明止盈价（tp）与止损价（sl），由引擎按 K 线高低点精确撮合。
@@ -13,6 +13,16 @@ from typing import Optional
 class Signal:
     action: str   # open_long / open_short / close / none
     reason: str = ""
+
+
+def create_strategy(name: str, params: dict) -> "Strategy":
+    """策略工厂：引擎/回测只通过名字取策略，新增策略只需加类并在此注册。"""
+    registry = {
+        TrendEma.name: TrendEma,
+        DonchianBreakout.name: DonchianBreakout,
+    }
+    cls = registry.get(name or TrendEma.name, TrendEma)
+    return cls(params or {})
 
 
 class Strategy:
@@ -74,7 +84,6 @@ class TrendEma(Strategy):
     """EMA 快慢交叉顺势 + ATR 动态止损 + 固定盈亏比止盈。"""
 
     name = "trend_ema"
-
     def __init__(self, params: dict):
         super().__init__(params)
         self.ema_fast = int(params.get("ema_fast", 5))
@@ -121,3 +130,61 @@ class TrendEma(Strategy):
             self.sl_px = entry + atr * self.atr_sl_mult
             self.tp_px = entry - atr * self.atr_sl_mult * self.tp_ratio
         return Signal(action, reason)
+
+
+class DonchianBreakout(Strategy):
+    """海龟式通道突破（吃单边趋势，入场快、规则机械、只用已收盘 K 线）。
+
+    - 入场：收盘价突破前 entry_len 根的最高价开多 / 最低价开空
+    - 离场：移动通道止损 = 前 exit_len 根的最低价（多）/最高价（空），逐 bar 上移/下移，
+      由引擎按 bar 低/高精确触发；无止盈目标（让利润奔跑，出场看结构）
+    - 可选 atr_stop_mult>0 时附加 ATR 硬止损兜底（默认 0 仅通道止损）
+    """
+
+    name = "donchian"
+
+    def __init__(self, params: dict):
+        super().__init__(params)
+        self.entry_len = int(params.get("entry_len", 30))
+        self.exit_len = int(params.get("exit_len", 15))
+        self.atr_period = int(params.get("atr_period", 14))
+        self.atr_stop_mult = float(params.get("atr_stop_mult", 0.0))
+
+    def on_bar(self, bar: dict, ctx) -> Signal:
+        hist = ctx.history
+        if len(hist) < self.entry_len + 1:
+            return Signal("none", "预热中")
+        pos = ctx.position
+        if pos.is_open:
+            self._update_channel_stop(hist, pos.side)
+            return Signal("none")
+        prev_highs = [b["h"] for b in hist[-(self.entry_len + 1):-1]]
+        prev_lows = [b["l"] for b in hist[-(self.entry_len + 1):-1]]
+        channel_high = max(prev_highs)
+        channel_low = min(prev_lows)
+        if bar["c"] > channel_high:
+            self.sl_px = self._channel_stop(hist, "long")
+            self.tp_px = None
+            return Signal("open_long", f"突破前{self.entry_len}根高点 {channel_high:.2f}")
+        if bar["c"] < channel_low:
+            self.sl_px = self._channel_stop(hist, "short")
+            self.tp_px = None
+            return Signal("open_short", f"跌破前{self.entry_len}根低点 {channel_low:.2f}")
+        return Signal("none")
+
+    def _channel_stop(self, hist: list[dict], side: str) -> float:
+        """离场止损：多仓 = 前 exit_len 根最低价；空仓 = 前 exit_len 根最高价。"""
+        bars = hist[-(self.exit_len + 1):-1]
+        if side == "long":
+            return min(b["l"] for b in bars)
+        return max(b["h"] for b in bars)
+
+    def _update_channel_stop(self, hist: list[dict], side: str) -> None:
+        """逐 bar 更新移动止损：只朝有利方向移动（多仓只上移，空仓只下移）。"""
+        stop = self._channel_stop(hist, side)
+        if self.sl_px is None:
+            self.sl_px = stop
+        elif side == "long":
+            self.sl_px = max(self.sl_px, stop)
+        else:
+            self.sl_px = min(self.sl_px, stop)

@@ -1,16 +1,18 @@
-# ============ 挑战规则（10u 战神玩法：翻倍目标 + 回撤出局，不限时） ============
+# ============ 挑战规则（10u 战神玩法：无胜利点，动态出局线保护，自动连续轮次） ============
 [challenge]
-initial_balance = 20        # 初始资金 USDT（20u 以内）
-target_multiple = 2.0       # 目标倍数：权益达到初始资金×该值即挑战成功（2 = 翻倍）
-max_drawdown_pct = 30       # 回撤出局：权益从峰值回撤该百分比即平仓停止
-duration_hours = 0          # 可选时长上限；0 = 不限时
-timeframe = "1m"            # 策略 K 线周期（1m/5m/15m）
+initial_balance = 20   # 纸盘/回测用显式值；实盘 auto=0 时忽略
+base_drawdown_pct = 30       # 起步（1.0x）回撤容忍：权益从峰值回撤 30% 结束本轮
+tight_drawdown_pct = 10      # 盈利 ≥2x 后收紧到 10%：深盈利最多回吐 10% 就锁利
+tight_start_multiple = 1.5   # 容忍率从 1x→30% 线性收紧到该倍数→10%（约 1.25x 起出局线高于本金）
+duration_hours = 0           # 可选单轮时长上限；0 = 不限时
+timeframe = "5m"             # 策略 K 线周期（donchian 建议 5m；1m 换手高费率拖累）
 
 # ============ 交易所 ============
 [exchange]
 symbol = "ETH/USDT:USDT"    # ccxt 符号（OKX ETH 永续）
 mode = "paper"              # paper=纸盘(本地撮合) | live=实盘(真实下单)
-proxy = "http://127.0.0.1:10808"  # 开发机走本地代理；VPS 直连请留空 ""
+feed = "auto"               # ws=WebSocket | rest=REST轮询 | auto=先WS收不到行情自动降级REST（本地代理推荐auto）
+proxy = "http://127.0.0.1:10808"  # 开发机走本地代理（TUN 未生效前不要留空）；VPS 直连请留空 ""
 fetch_fees_from_okx = true  # 启动时从 OKX 拉取实际费率（需 API key），失败则用默认 0.05%/0.02%
 taker_fee = 0.0005          # 默认费率（仅当 fetch_fees_from_okx=false 或拉取失败时使用）
 maker_fee = 0.0002
@@ -25,13 +27,12 @@ liquidation_buffer = 0.05   # 强平价缓冲（5%，即达到强平价前强制
 
 # ============ 策略 ============
 [strategy]
-name = "trend_ema"
+name = "donchian"            # donchian=海龟式通道突破（默认） | trend_ema=EMA交叉（备选）
 [strategy.params]
-ema_fast = 5
-ema_slow = 20
-atr_period = 14
-atr_sl_mult = 2.0           # 止损 = ATR × 该倍数
-tp_ratio = 2.0              # 止盈 = 止损距离 × 该倍数（盈亏比）
+entry_len = 30               # 突破通道：收盘价突破前 N 根最高开多 / 最低开空
+exit_len = 15                # 移动通道止损：前 M 根最低/最高（逐 bar 只朝有利方向移动）
+atr_period = 14              # 备用 ATR（保留字段）
+atr_stop_mult = 0.0          # >0 时附加 ATR 硬止损兜底；0 = 仅通道止损
 
 # ============ 存储与日志 ============
 [storage]

@@ -8,12 +8,17 @@ from pydantic import BaseModel, Field
 
 
 class ChallengeConfig(BaseModel):
-    """10u 战神玩法：翻倍目标 + 回撤出局，不限时（duration_hours=0 表示不限时）。"""
-    initial_balance: float = 20
-    target_multiple: float = 2.0    # 目标倍数：权益达初始资金×该值即挑战成功（2=翻倍）
-    max_drawdown_pct: float = 30    # 回撤出局：权益从峰值回撤该百分比即失败停止
-    duration_hours: float = 0       # 可选时长上限；0 = 不限时
-    timeframe: str = "1m"
+    """10u 战神玩法：无胜利点，动态回撤线保护，进程内自动连续轮次。
+
+    出局线 = 运营峰值 × (1 - 容忍率)；容忍率随权益倍数平滑收紧：
+    1x→base_drawdown_pct，tight_start_multiple 倍→tight_drawdown_pct，之后保持。
+    """
+    initial_balance: float = 0     # 0 = auto：实盘启动拉 OKX 实际可用余额；纸盘/回测必须 >0
+    base_drawdown_pct: float = 30  # 1x 时回撤容忍（起步容错）
+    tight_drawdown_pct: float = 10  # 达到 tight_start_multiple 后收紧到该值（深盈利保护）
+    tight_start_multiple: float = 1.5  # 从 1x 到该倍数容忍率线性收紧（约 1.25x 起出局线高于本金）
+    duration_hours: float = 0      # 可选单轮时长上限；0 = 不限时
+    timeframe: str = "5m"          # 策略 K 线周期（donchian 建议 5m，1m 换手过高费率拖累）
 
 
 class ExchangeConfig(BaseModel):
@@ -35,7 +40,7 @@ class RiskConfig(BaseModel):
 
 
 class StrategyConfig(BaseModel):
-    name: str = "trend_ema"
+    name: str = "donchian"  # 海龟式通道突破；trend_ema 保留可选
     params: dict = Field(default_factory=dict)
 
 

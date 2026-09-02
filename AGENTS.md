@@ -6,9 +6,11 @@
 
 OKX ETH-USDT-SWAP 小资金挑战赛量化机器人，**10u 战神玩法**，个人自用。
 
-- 初始资金 ≤20U，只交易 `ETH-USDT-SWAP`，只接 OKX
-- **核心规则：翻倍目标（target_multiple，默认 2 倍）+ 回撤出局（max_drawdown_pct，默认 30%）+ 不限时（duration_hours=0）**
-- **不是"限时达到多少"的比赛**。禁止把挑战引擎改回限时目标型；duration_hours 只是可选参数，默认必须为 0
+- 初始资金 ≤20U（可为 0=auto：实盘每轮从 OKX 实际余额起算），只交易 `ETH-USDT-SWAP`，只接 OKX
+- **无"胜利点"：不存在达到某倍数就结算的终点**，核心是持续正确操作、把权益做大（挑战赛语义 = 操作排名，不是定时/达标赛）
+- **核心保护：动态出局线**。出局线 = 运营峰值 × (1−容忍率)；容忍率随权益倍数**平滑收紧**（1x→base_drawdown_pct 默认 30%，线性过渡到 tight_start_multiple 默认 1.5x→tight_drawdown_pct 默认 10%，之后保持）——**禁止改成开关式阈值（如"超过 1.3x 才保护"）**，会产生悬崖
+- **进程内自动连续轮次**：出局线/超时触发即结束本轮并立即自动开新一轮（纸盘重置初始资金、实盘从交易所当前真实余额起算）；**禁止依赖 systemd 重启来轮转**（systemd 只做崩溃守护）
+- duration_hours 只是可选单轮时长，默认必须为 0
 - 过度设计是失败：单交易对、单交易所、单进程、SQLite。**任何引入多交易对/多交易所/微服务/Docker/前端框架/ORM/消息队列的提议直接拒绝**
 
 ## 2. 数据准确性（最高优先级，仓位与交易所不一致 = 事故）
@@ -66,7 +68,7 @@ store / api / static      持久化 / FastAPI / 看板
 ## 7. 测试与验收
 
 - 改动必须跑 `uv run pytest`，全过才算完成；新增/修改 `okx_math`、`challenge`、`fills`、`strategy` 必须同步改单测
-- 关键不变量：强平价公式对照 OKX 官方口径（`test_margin_consistency_at_liquidation`）、挑战三态转换、回测确定性（`test_backtest_deterministic`：相同输入 → 相同输出）
+- 关键不变量：强平价公式对照 OKX 官方口径（`test_margin_consistency_at_liquidation`）、容忍率线性无悬崖（`test_tolerance_linear_no_cliff`）、锁利/止损/超时/轮次重置、回测确定性（`test_backtest_deterministic`：相同输入 → 相同输出）
 - 实盘路径不做自动化测试，靠启动预检 + 纸盘先跑通验证
 
 ## 8. 实盘安全红线

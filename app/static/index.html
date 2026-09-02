@@ -37,8 +37,8 @@
     <div class="dim" id="subprice">bid/ask · funding</div>
   </div>
   <div class="card">
-    <h3>挑战进度（10u 战神）</h3>
-    <div><span id="status" class="tag running">running</span> <span id="result" class="dim"></span></div>
+    <h3>当前轮（无胜利点 · 动态出局线）</h3>
+    <div><span id="status" class="tag running">running</span> <span id="round" class="dim"></span></div>
     <div class="big" id="equity">-</div>
     <div class="dim" id="challenge_info">-</div>
     <div class="bar"><div id="progress" style="width:0%"></div></div>
@@ -80,13 +80,16 @@ function render(s) {
   const c = s.challenge || {};
   $('status').textContent = c.status || 'running';
   $('status').className = 'tag ' + (c.status || 'running');
-  $('result').textContent = c.result || '';
+  $('round').textContent = c.result || `第 ${c.round || '-'} 轮`;
   $('equity').textContent = fmt(c.equity, 4);
   $('challenge_info').textContent =
-    `初始 ${fmt(c.initial_balance)} → 目标 ${fmt(c.target_equity)} ×${c.target_multiple} · ` +
-    `峰值 ${fmt(c.peak_equity)} · 回撤 ${c.drawdown_pct}%/${c.max_drawdown_pct}% · ` +
-    `剩余 ${c.remaining_sec ? Math.round(c.remaining_sec/60) + ' 分' : '不限时'}`;
-  $('progress').style.width = (c.progress_pct || 0) + '%';
+    `初始 ${fmt(c.initial_balance)} · 倍数 ${fmt(c.multiple, 3)}x · 峰值 ${fmt(c.peak_equity)} · ` +
+    `容忍 ${c.tolerance_pct}% · 出局线 ${fmt(c.guard_level)} · 当前回撤 ${c.drawdown_pct}%` +
+    (c.remaining_sec ? ` · 剩余 ${Math.round(c.remaining_sec/60)} 分` : ' · 不限时');
+  // 进度条 = 距出局线的安全空间（峰值为 100%，越接近出局线越低）
+  const room = (c.guard_level && c.peak_equity > c.guard_level)
+    ? Math.max(0, Math.min(100, (c.equity - c.guard_level) / (c.peak_equity - c.guard_level) * 100)) : 0;
+  $('progress').style.width = room + '%';
 
   const p = s.position || {};
   $('pos_side').textContent = p.side === 'flat' || !p.side ? '空仓' : (p.side === 'long' ? '多仓 ▲' : '空仓 ▼');

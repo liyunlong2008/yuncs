@@ -1,24 +1,22 @@
-"""玩法适配回测：逐 K 线回放 10u 战神挑战。
+"""玩法适配回测：按轮次逐 K 线回放 10u 战神玩法。
 
-与纸盘/实盘共用：策略代码、挑战引擎、撮合模型（K 线 open ± 滑点）、
-OKX 强平价公式、资金费结算（UTC 00:00/08:00/16:00）。
+与纸盘/实盘共用：策略代码、轮次引擎（动态出局线）、撮合模型、资金费、强平。
 
-成交时序：信号用"已收盘"bar 计算（无未来函数）→ 下一根 bar 开盘价成交；
-止盈/止损/强平按本根 bar 高低点精确撮合。
+- 无胜利点：轮次在动态出局线触发（GUARD）或超时（TIMEOUT）时结束，记录结束倍数，
+  随即自动开新一轮（重置初始资金），直到数据跑完
+- 成交时序：信号用"已收盘"bar 计算（无未来函数）→ 下一根 bar 开盘价成交；
+  止盈/止损/强平/出局线按本根 bar 高低点或收盘精确撮合
 """
 from __future__ import annotations
 
-import time
 from typing import Optional
-
-from loguru import logger
 
 from . import fills, okx_math
 from .broker import Position
 from .challenge import Challenge, ChallengeConfig, Status
 from .config import Config
 from .okx_feed import InstrumentSpec
-from .strategy import Signal, TrendEma
+from .strategy import Signal, create_strategy
 from .wallet import Wallet
 
 
@@ -29,31 +27,35 @@ class Backtest:
         self.bars = bars
         self.funding = funding
         self.spec = spec or InstrumentSpec()  # 默认值即 OKX ETH-USDT-SWAP 当前规格
-        self.strategy = TrendEma(cfg.strategy.params)
+        self.strategy = create_strategy(cfg.strategy.name, cfg.strategy.params)
+        initial = cfg.challenge.initial_balance
+        if initial <= 0:
+            raise ValueError("回测 [challenge].initial_balance 必须 > 0")
         self.challenge = Challenge(ChallengeConfig(
-            initial_balance=cfg.challenge.initial_balance,
-            target_multiple=cfg.challenge.target_multiple,
-            max_drawdown_pct=cfg.challenge.max_drawdown_pct,
+            initial_balance=initial,
+            base_drawdown_pct=cfg.challenge.base_drawdown_pct,
+            tight_drawdown_pct=cfg.challenge.tight_drawdown_pct,
+            tight_start_multiple=cfg.challenge.tight_start_multiple,
             duration_hours=cfg.challenge.duration_hours,
             timeframe=cfg.challenge.timeframe,
         ))
-        self.wallet = Wallet.new(cfg.challenge.initial_balance)
+        self.wallet = Wallet.new(initial)
         self.position = Position()
         self.trades: list[dict] = []
         self.equity_curve: list[dict] = []
+        self.rounds: list[dict] = []
+        self._round_no = 0
         self._funding_idx = 0
         self._next_funding_ts: Optional[float] = None
+        self._max_equity_seen = initial
 
     def run(self) -> dict:
         if not self.bars:
             return {"error": "无K线数据"}
-        # 挑战时间轴从数据起点开始
         self.challenge.start_ts = self.bars[0]["ts"] / 1000.0
-        # 资金费结算时间轴
         self._next_funding_ts = self._first_funding_after(self.bars[0]["ts"])
 
         pending: Optional[Signal] = None
-        i = 0
         for i, bar in enumerate(self.bars):
             ts = bar["ts"]
             # 1) 上一根信号的执行（本根开盘成交）
@@ -76,8 +78,9 @@ class Backtest:
             # 4) 资金费结算
             if self._next_funding_ts and ts >= self._next_funding_ts:
                 self._settle_funding(bar["c"])
-            # 5) 权益 + 挑战
+            # 5) 权益 + 轮次引擎
             equity = self.wallet.equity(self.position.unrealized(bar["c"]))
+            self._max_equity_seen = max(self._max_equity_seen, equity)
             status = self.challenge.update(equity, now=ts / 1000.0)
             self.equity_curve.append({
                 "ts": ts, "equity": equity,
@@ -85,8 +88,14 @@ class Backtest:
                 "status": status.value,
             })
             if status != Status.RUNNING:
-                i += 1
-                break
+                # 出局线/超时触发：先平掉剩余仓位，记录本轮，开新一轮
+                if self.position.is_open:
+                    self._close(fill_px=bar["c"], reason=f"guard({self.challenge.guard_equity:.4f})"
+                               if status == Status.GUARD else "timeout")
+                self._record_round(status, bar)
+                self._reset_round(bar)
+                pending = None
+                continue
             # 6) 计算下一根信号
             sig = self.strategy.on_bar(bar, _BarsCtx(self.bars[: i + 1], self.position, bar["c"]))
             if sig.action in ("open_long", "open_short") and not self.position.is_open:
@@ -94,13 +103,36 @@ class Backtest:
             elif sig.action == "close" and self.position.is_open:
                 pending = sig
 
-        # 结束：未终结则按最后一根收盘价结算剩余仓位
-        if self.position.is_open:
-            last = self.bars[min(i, len(self.bars) - 1)]
-            self._close(fill_px=last["c"], reason="end")
+        # 收尾：数据跑完仍未触线 -> 记录最后一轮（若末根 bar 刚结束一轮则跳过）
+        if not self.rounds or self.rounds[-1]["ts"] != self.bars[-1]["ts"]:
+            self._record_round(Status.RUNNING, self.bars[-1], finished=False)
         return self._report()
 
-    # ---------- 内部 ----------
+    # ---------- 轮次 ----------
+    def _record_round(self, status: Status, bar: dict, finished: bool = True) -> None:
+        equity = self.wallet.equity(self.position.unrealized(bar["c"]))
+        end_multiple = equity / self.cfg.challenge.initial_balance
+        self.rounds.append({
+            "round": self._round_no + 1,
+            "status": status.value if finished else "end_of_data",
+            "initial": self.cfg.challenge.initial_balance,
+            "final": round(equity, 4),
+            "multiple": round(end_multiple, 4),
+            "peak": round(self.challenge.peak_equity, 4),
+            "result": self.challenge.result,
+            "ts": bar["ts"],
+        })
+
+    def _reset_round(self, bar: dict) -> None:
+        self._round_no += 1
+        initial = self.cfg.challenge.initial_balance
+        self.strategy.on_open()
+        self.position = Position()
+        self.wallet = Wallet.new(initial)
+        self.challenge.start_round(initial)
+        self.challenge.start_ts = bar["ts"] / 1000.0
+
+    # ---------- 内部撮合（与纸盘同一套口径） ----------
     def _execute_signal(self, sig: Signal, bar: dict) -> None:
         if self.position.is_open or sig.action not in ("open_long", "open_short"):
             return
@@ -145,7 +177,6 @@ class Backtest:
         self.strategy.on_open()
 
     def _settle_funding(self, mark: float) -> None:
-        # 用结算时刻记录的资金费率
         rate = 0.0
         while self._funding_idx < len(self.funding) and \
                 self.funding[self._funding_idx]["ts"] <= self._next_funding_ts:
@@ -175,20 +206,29 @@ class Backtest:
             return 0, 0
         return contracts, okx_math.contracts_to_eth(contracts, self.spec.ct_val)
 
+    # ---------- 报告 ----------
     def _report(self) -> dict:
-        equity = self.wallet.equity(0.0)
+        completed = [r for r in self.rounds if r["status"] != "end_of_data"]
+        guards = [r for r in completed if r["status"] == Status.GUARD.value]
+        pos_rounds = [r for r in completed if r["multiple"] > 1.0]
+        neg_rounds = [r for r in completed if r["multiple"] <= 1.0]
+        mults = [r["multiple"] for r in completed]
         pnls = [t["pnl"] for t in self.trades]
         wins = [p for p in pnls if p > 0]
         losses = [p for p in pnls if p <= 0]
         liq_count = sum(1 for t in self.trades if t["reason"] == "liquidation")
-        peak = max((s["equity"] for s in self.equity_curve), default=self.cfg.challenge.initial_balance)
         max_dd = max((s["drawdown_pct"] for s in self.equity_curve), default=0.0)
         return {
-            "challenge_status": self.challenge.status.value,
-            "challenge_result": self.challenge.result,
+            "rounds_total": len(self.rounds),
+            "rounds_completed": len(completed),
+            "rounds_positive": len(pos_rounds),
+            "rounds_negative": len(neg_rounds),
+            "round_positive_rate": round(100.0 * len(pos_rounds) / len(completed), 1)
+            if completed else 0.0,
+            "avg_end_multiple": round(sum(mults) / len(mults), 3) if mults else 0.0,
+            "best_round_multiple": round(max(mults), 3) if mults else 0.0,
+            "last_round_status": self.rounds[-1]["status"] if self.rounds else "-",
             "initial_balance": self.cfg.challenge.initial_balance,
-            "final_equity": round(equity, 4),
-            "total_pnl": round(equity - self.cfg.challenge.initial_balance, 4),
             "trades": len(self.trades),
             "wins": len(wins),
             "losses": len(losses),
@@ -196,11 +236,10 @@ class Backtest:
             "total_fees": round(self.wallet.fees_paid, 4),
             "total_funding": round(self.wallet.funding_paid, 4),
             "liquidation_count": liq_count,
-            "peak_equity": round(peak, 4),
+            "max_equity_seen": round(self._max_equity_seen, 4),
             "max_drawdown_pct": round(max_dd, 2),
             "bars": len(self.bars),
-            "elapsed_hours": round((self.equity_curve[-1]["ts"] - self.bars[0]["ts"]) / 3.6e6, 2)
-            if self.equity_curve else 0.0,
+            "elapsed_hours": round((self.bars[-1]["ts"] - self.bars[0]["ts"]) / 3.6e6, 2),
         }
 
 

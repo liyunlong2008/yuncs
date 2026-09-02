@@ -61,8 +61,8 @@ cd ~/yuncs && git pull && uv sync --frozen && sudo systemctl restart yuncs
 
 ## 6. 运维注意
 
-- **先纸盘跑至少 1 轮挑战**，确认挑战结束行为（翻倍/回撤出局）符合预期，再切实盘
-- 实盘用 OKX 子账户 + 单独 API key + 提币白名单，避免主账户风险
+- **先纸盘跑至少几轮**，确认轮次结束行为（动态出局线触发/超时 → 自动开新一轮）符合预期，再切实盘
+- 实盘用 OKX 子账户 + 单独 API key + 提币白名单，避免主账户风险；`initial_balance=0` 时实盘每轮自动用实际余额
 - 每天看一次 `journalctl -u yuncs` 与 `data/bot.db` 的权益曲线
-- 紧急停止：`sudo systemctl stop yuncs`（bot 进程退出前会平仓结算）；
+- 紧急停止：`sudo systemctl stop yuncs`（进程退出前会平仓结算当前轮）；
   或 `curl -X POST http://127.0.0.1:8000/api/kill`（优雅平仓）
