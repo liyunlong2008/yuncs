@@ -3,345 +3,284 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>yuncs · ETH 10u战神</title>
+<title>yuncs · ETH-USDT-SWAP</title>
 <script src="echarts.min.js"></script>
 <style>
-  :root {
-    --bg:#0b0f17; --card:#121826; --card2:#0e1420; --line:#1f2a40; --line2:#25324d;
-    --tx:#e6ecf7; --dim:#7d8ea8; --faint:#56647e;
-    --green:#2ee59d; --red:#ff5c7a; --amber:#f5b84b; --blue:#5aa2ff;
+  :root{
+    --bg:#0e1116; --panel:#141a23; --panel2:#1a2130; --line:#232b3a;
+    --tx:#e6e8ee; --dim:#8b93a3; --faint:#5c667a;
+    --green:#0ecb81; --red:#f6465d; --amber:#f0b90b; --blue:#4c8dff;
     --mono:"SF Mono","Cascadia Code",Consolas,"Courier New",monospace;
   }
-  * { box-sizing:border-box; margin:0; padding:0; }
-  html,body { background:var(--bg); color:var(--tx); font:13px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif; }
-  .wrap { max-width:1280px; margin:0 auto; padding:14px 16px 40px; }
-  a { color:var(--blue); text-decoration:none; }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--tx);font:13px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1280px;margin:0 auto;padding:12px 16px 32px}
 
-  /* ---------- 顶栏 ---------- */
-  .topbar { display:flex; align-items:center; gap:14px; padding:10px 2px 16px; flex-wrap:wrap; }
-  .logo { font-weight:800; font-size:16px; letter-spacing:.5px; }
-  .logo span { color:var(--amber); }
-  .pill { display:inline-flex; align-items:center; gap:6px; padding:3px 12px; border-radius:99px;
-          font-size:12px; border:1px solid var(--line2); color:var(--dim); }
-  .dot { width:8px; height:8px; border-radius:50%; background:var(--faint); }
-  .dot.on { background:var(--green); box-shadow:0 0 8px var(--green); }
-  .dot.won { background:var(--amber); box-shadow:0 0 8px var(--amber); }
-  .dot.lost { background:var(--red); box-shadow:0 0 8px var(--red); }
-  .spacer { flex:1; }
-  .price-box { text-align:right; }
-  .price { font-family:var(--mono); font-size:26px; font-weight:700; letter-spacing:.3px; }
-  .subprice { color:var(--dim); font-family:var(--mono); font-size:11px; margin-top:1px; }
+  /* 顶栏：仿交易所顶部条 */
+  .hdr{display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--line);padding-bottom:10px;flex-wrap:wrap}
+  .sym{font-weight:800;font-size:15px}
+  .sym .perp{color:var(--dim);font-weight:500;font-size:12px;margin-left:6px}
+  .state{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--dim);padding:2px 10px;border:1px solid var(--line);border-radius:6px}
+  .state .dot{width:7px;height:7px;border-radius:50%;background:var(--faint)}
+  .state.run .dot{background:var(--green);box-shadow:0 0 6px var(--green)}
+  .spacer{flex:1}
+  .px{font-family:var(--mono);font-size:24px;font-weight:700}
+  .px.g{color:var(--green)}.px.r{color:var(--red)}
+  .pxsub{font-family:var(--mono);font-size:11px;color:var(--faint);text-align:right}
 
-  /* ---------- 卡片与栅格 ---------- */
-  .grid { display:grid; grid-template-columns: minmax(0,1.9fr) minmax(0,1fr); gap:12px; }
-  @media (max-width:980px){ .grid { grid-template-columns:1fr; } }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
-  .card + .card { margin-top:12px; }
-  .card h3 { font-size:12px; color:var(--dim); font-weight:600; letter-spacing:1px; margin-bottom:10px;
-             display:flex; align-items:center; justify-content:space-between; }
-  .card h3 .hint { font-weight:400; letter-spacing:0; color:var(--faint); font-size:11px; font-family:var(--mono); }
+  /* 主网格 */
+  .grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:10px;margin-top:12px}
+  @media(max-width:960px){.grid{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+  .panel h3{font-size:12px;color:var(--dim);font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+  .panel h3 .tag{margin-left:auto;font-weight:400;color:var(--faint);font-size:11px;font-family:var(--mono)}
 
-  /* 当前轮大字 */
-  .round-main { display:flex; align-items:baseline; gap:12px; }
-  .equity { font-family:var(--mono); font-size:38px; font-weight:800; }
-  .equity small { font-size:14px; color:var(--dim); font-weight:400; }
-  .multiple { font-family:var(--mono); font-size:16px; font-weight:700; padding:2px 10px; border-radius:6px; }
-  .multiple.up { color:var(--green); background:rgba(46,229,157,.1); }
-  .multiple.down { color:var(--red); background:rgba(255,92,122,.1); }
-  .kv { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:8px 12px; margin-top:14px; }
-  .kv div { background:var(--card2); border:1px solid var(--line); border-radius:8px; padding:7px 10px; }
-  .kv .k { font-size:11px; color:var(--faint); }
-  .kv .v { font-family:var(--mono); font-size:14px; font-weight:600; margin-top:2px; }
-  .kv .v.danger { color:var(--red); }
-  .kv .v.ok { color:var(--green); }
-  .kv .v.warn { color:var(--amber); }
+  /* KPI 行：仿交易所行情卡，数字优先 */
+  .kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:10px}
+  .kpi>div{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
+  .kpi .k{font-size:11px;color:var(--faint)}
+  .kpi .v{font-family:var(--mono);font-size:15px;font-weight:600;margin-top:1px}
+  .kpi .v.big{font-size:19px}
+  .v.g{color:var(--green)}.v.r{color:var(--red)}.v.y{color:var(--amber)}
 
-  .meter { height:8px; background:#0a0f1a; border:1px solid var(--line); border-radius:6px;
-           overflow:hidden; margin-top:12px; position:relative; }
-  .meter>div { height:100%; border-radius:6px; transition:width .4s ease;
-               background:linear-gradient(90deg,var(--blue),var(--green)); }
-  .meter-lbl { display:flex; justify-content:space-between; font-family:var(--mono); font-size:11px;
-               color:var(--faint); margin-top:5px; }
+  /* 安全空间条 */
+  .meter{height:6px;background:#0b0f16;border:1px solid var(--line);border-radius:4px;overflow:hidden;margin:6px 0 2px}
+  .meter>div{height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:4px;transition:width .4s}
 
-  #chart { height:340px; width:100%; }
-  .empty { color:var(--faint); font-family:var(--mono); display:flex; align-items:center;
-           justify-content:center; height:100%; font-size:12px; }
+  #chart{height:320px;width:100%}
+  .empty{color:var(--faint);font-family:var(--mono);display:flex;align-items:center;justify-content:center;height:100%;font-size:12px}
 
-  table { width:100%; border-collapse:collapse; font-size:12px; }
-  th { color:var(--faint); font-weight:500; text-align:right; padding:4px 8px; border-bottom:1px solid var(--line2); }
-  th:first-child,td:first-child { text-align:left; }
-  td { padding:5px 8px; text-align:right; font-family:var(--mono); border-bottom:1px solid var(--line); }
-  tr:last-child td { border-bottom:none; }
-  .green{color:var(--green)} .red{color:var(--red)} .dim{color:var(--dim)} .faint{color:var(--faint)}
-  .side { padding:1px 8px; border-radius:4px; font-size:11px; font-weight:700; }
-  .side.long { color:var(--green); background:rgba(46,229,157,.12); }
-  .side.short { color:var(--red); background:rgba(255,92,122,.12); }
-  .side.flat { color:var(--faint); background:var(--card2); }
-  .reason { color:var(--dim); }
-  .pos-main { font-size:18px; font-weight:700; font-family:var(--mono); }
-  .scroll { max-height:300px; overflow:auto; }
+  /* 信息行（仓位/钱包） */
+  .rows div{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line);font-family:var(--mono)}
+  .rows div:last-child{border-bottom:none}
+  .rows .k{color:var(--dim);font-size:12px}
+  .rows .val{font-weight:600}
+
+  /* Tab 切换 */
+  .tabs{display:flex;gap:4px;margin-bottom:8px}
+  .tabs button{background:none;border:none;color:var(--dim);font-size:13px;padding:4px 12px;cursor:pointer;border-radius:6px}
+  .tabs button.on{background:var(--panel2);color:var(--tx)}
+  table{width:100%;border-collapse:collapse;font-size:12px;font-family:var(--mono)}
+  th{color:var(--faint);font-weight:500;text-align:right;padding:3px 6px;border-bottom:1px solid var(--line2,#2a3346)}
+  th:first-child,td:first-child{text-align:left}
+  td{padding:4px 6px;text-align:right;border-bottom:1px solid var(--line)}
+  .g{color:var(--green)}.r{color:var(--red)}.dim{color:var(--dim)}.faint{color:var(--faint)}
+  .side{padding:0 6px;border-radius:3px;font-weight:700}
+  .side.long{color:var(--green);background:rgba(14,203,129,.15)}
+  .side.short{color:var(--red);background:rgba(246,70,93,.15)}
 </style>
 </head>
 <body>
 <div class="wrap">
 
-  <!-- ============ 顶栏 ============ -->
-  <div class="topbar">
-    <div class="logo">yuncs <span>·</span> ETH 10u战神</div>
-    <span class="pill" id="mode">-</span>
-    <span class="pill"><span class="dot" id="dot"></span><span id="state">-</span></span>
-    <span class="pill" id="roundPill">第 - 轮</span>
-    <span class="pill" id="feedPill">-</span>
+  <div class="hdr">
+    <span class="sym">yuncs<span class="perp">ETH-USDT-SWAP 永续</span></span>
+    <span class="state" id="state"><span class="dot"></span><span id="stateTxt">-</span></span>
+    <span class="state" id="round">第 - 轮</span>
+    <span class="state" id="feed">-</span>
     <div class="spacer"></div>
-    <div class="price-box">
-      <div class="price" id="price">-</div>
-      <div class="subprice" id="subprice">bid - / ask - · funding -</div>
+    <div>
+      <div class="px" id="px">-</div>
+      <div class="pxsub" id="pxsub">-</div>
     </div>
   </div>
 
   <div class="grid">
-    <!-- ============ 左列 ============ -->
     <div>
-      <div class="card">
-        <h3>当前轮 <span class="hint" id="result"></span></h3>
-        <div class="round-main">
-          <div class="equity" id="equity">-</div>
-          <div class="multiple" id="multiple">-</div>
+      <div class="panel">
+        <div class="kpi">
+          <div><div class="k">权益 / 倍数</div><div class="v big" id="kEquity">-</div></div>
+          <div><div class="k">出局线</div><div class="v r" id="kGuard">-</div></div>
+          <div><div class="k">距线空间</div><div class="v" id="kRoom">-</div></div>
+          <div><div class="k">峰值</div><div class="v" id="kPeak">-</div></div>
+          <div><div class="k">回撤 / 容忍</div><div class="v" id="kDD">-</div></div>
+          <div><div class="k">本轮初始</div><div class="v" id="kInit">-</div></div>
         </div>
-        <div class="meter"><div id="meterFill" style="width:0%"></div></div>
-        <div class="meter-lbl"><span id="meterLeft">-</span><span id="meterRight">-</span></div>
-        <div class="kv">
-          <div><div class="k">初始资金</div><div class="v" id="kvInitial">-</div></div>
-          <div><div class="k">峰值</div><div class="v" id="kvPeak">-</div></div>
-          <div><div class="k">当前回撤</div><div class="v" id="kvDD">-</div></div>
-          <div><div class="k">容忍率</div><div class="v" id="kvTol">-</div></div>
-          <div><div class="k">出局线</div><div class="v danger" id="kvGuard">-</div></div>
-          <div><div class="k">距出局线空间</div><div class="v" id="kvRoom">-</div></div>
-        </div>
+        <div class="meter"><div id="meter" style="width:0%"></div></div>
+        <div id="chart"><div class="empty">加载中…</div></div>
       </div>
 
-      <div class="card">
-        <h3>权益曲线 <span class="hint" id="chartHint">本轮实时</span></h3>
-        <div id="chart"><div class="empty">等待数据…</div></div>
-      </div>
-
-      <div class="card">
-        <h3>最近成交 <span class="hint">开→平 已实现</span></h3>
-        <div class="scroll">
-          <table id="tradesTb">
-            <thead><tr><th>时间</th><th>方向</th><th>数量 ETH</th><th>开仓</th><th>平仓</th><th>盈亏</th><th>原因</th></tr></thead>
-            <tbody></tbody>
-          </table>
+      <div class="panel" style="margin-top:10px">
+        <div class="tabs">
+          <button id="tabTrades" class="on" onclick="showTab('trades')">最近成交</button>
+          <button id="tabRuns" onclick="showTab('runs')">轮次历史</button>
+          <span style="margin-left:auto;color:var(--faint);font-size:11px" id="result"></span>
         </div>
+        <div id="tradesBox"><table><thead><tr><th>时间</th><th>方向</th><th>数量</th><th>开仓</th><th>平仓</th><th>盈亏</th><th>原因</th></tr></thead><tbody></tbody></table></div>
+        <div id="runsBox" style="display:none"><table><thead><tr><th>#</th><th>模式</th><th>初始</th><th>结束倍数</th><th>状态</th></tr></thead><tbody></tbody></table></div>
       </div>
     </div>
 
-    <!-- ============ 右列 ============ -->
     <div>
-      <div class="card">
-        <h3>持仓 <span class="hint">USDT 口径</span></h3>
-        <div class="pos-main" id="posSide">空仓</div>
-        <div class="kv">
-          <div><div class="k">数量</div><div class="v" id="posSize">-</div></div>
-          <div><div class="k">名义价值</div><div class="v" id="posNotional">-</div></div>
-          <div><div class="k">开仓价</div><div class="v" id="posEntry">-</div></div>
-          <div><div class="k">成本价(含费)</div><div class="v" id="posCostPx">-</div></div>
-          <div><div class="k">强平价</div><div class="v danger" id="posLiq">-</div></div>
-          <div><div class="k">占用保证金</div><div class="v" id="posMargin">-</div></div>
-          <div><div class="k">成本</div><div class="v" id="posCost">-</div></div>
-          <div><div class="k">未实现盈亏</div><div class="v" id="posUpl">-</div></div>
+      <div class="panel">
+        <h3>持仓 <span class="tag">USDT 口径</span></h3>
+        <div id="posSide" style="font-family:var(--mono);font-size:20px;font-weight:800;margin-bottom:6px">空仓</div>
+        <div class="rows">
+          <div><span class="k">数量</span><span class="val" id="pSize">-</span></div>
+          <div><span class="k">名义价值</span><span class="val" id="pNotional">-</span></div>
+          <div><span class="k">开仓价</span><span class="val" id="pEntry">-</span></div>
+          <div><span class="k">成本价(含费)</span><span class="val" id="pCostPx">-</span></div>
+          <div><span class="k">强平价</span><span class="val r" id="pLiq">-</span></div>
+          <div><span class="k">保证金</span><span class="val" id="pMargin">-</span></div>
+          <div><span class="k">未实现盈亏</span><span class="val" id="pUpl">-</span></div>
         </div>
       </div>
 
-      <div class="card">
-        <h3>钱包 <span class="hint" id="modeHint">纸盘独立记账</span></h3>
-        <div class="kv">
-          <div><div class="k">可用余额</div><div class="v" id="walBalance">-</div></div>
-          <div><div class="k">锁定保证金</div><div class="v" id="walMargin">-</div></div>
-          <div><div class="k">已实现盈亏</div><div class="v" id="walPnl">-</div></div>
-          <div><div class="k">手续费累计</div><div class="v" id="walFees">-</div></div>
-          <div><div class="k">资金费累计</div><div class="v" id="walFunding">-</div></div>
-          <div><div class="k">可买(杠杆内)</div><div class="v" id="walBuyable">-</div></div>
+      <div class="panel" style="margin-top:10px">
+        <h3>钱包 <span class="tag">初始 <span id="wInit">-</span></span></h3>
+        <div class="rows">
+          <div><span class="k">可用余额</span><span class="val" id="wBal">-</span></div>
+          <div><span class="k">锁定保证金</span><span class="val" id="wMargin">-</span></div>
+          <div><span class="k">已实现盈亏</span><span class="val" id="wPnl">-</span></div>
+          <div><span class="k">手续费 / 资金费</span><span class="val" id="wFees">-</span></div>
+          <div><span class="k">可买(杠杆内)</span><span class="val" id="wBuyable">-</span></div>
         </div>
-      </div>
-
-      <div class="card">
-        <h3>轮次历史 <span class="hint">进程内自动连续</span></h3>
-        <table id="runsTb">
-          <thead><tr><th>#</th><th>模式</th><th>初始</th><th>结束倍数</th><th>状态</th></tr></thead>
-          <tbody></tbody>
-        </table>
       </div>
     </div>
   </div>
 </div>
 
 <script>
-const $ = id => document.getElementById(id);
-const num = (v, d=2) => (v==null || isNaN(v)) ? '-' : Number(v).toLocaleString('zh-CN',{minimumFractionDigits:d, maximumFractionDigits:d});
-const sgn = (v, d=4) => (v==null) ? '-' : (v>0?'+':'') + Number(v).toFixed(d);
-const fmtTs = ts => { const t = new Date(ts*1000); const p=n=>String(n).padStart(2,'0'); return p(t.getHours())+':'+p(t.getMinutes())+':'+p(t.getSeconds()); };
-const cls = v => v>0 ? 'green' : v<0 ? 'red' : 'dim';
-let chart = null, histPts = [], lastPx = 0, lastTs = 0, initial = 0, guard = 0, peak = 0;
+const $=id=>document.getElementById(id);
+const num=(v,d=2)=>(v==null||isNaN(v))?'-':Number(v).toLocaleString('zh-CN',{minimumFractionDigits:d,maximumFractionDigits:d});
+const sgn=(v,d=2)=>(v==null)?'-':(v>0?'+':'')+Number(v).toFixed(d);
+const c3=v=>v>0?'g':v<0?'r':'';
+const fmtTs=t=>{const x=new Date(t*1000),p=n=>String(n).padStart(2,'0');return p(x.getHours())+':'+p(x.getMinutes())+':'+p(x.getSeconds())};
 
-/* ---------- 图表 ---------- */
-function initChart(history) {
-  chart = echarts.init($('chart'));
+let chart=null, lastPx=0, lastTs=0, initial=0, guard=0, peak=0;
+
+function initChart(){
+  if(typeof echarts==='undefined')throw new Error('no echarts');
+  chart=echarts.init($('chart'));
   chart.setOption({
     animation:false,
-    grid:{left:58,right:18,top:22,bottom:30},
-    tooltip:{trigger:'axis', valueFormatter:v => v==null?'-':Number(v).toFixed(4)},
-    xAxis:{type:'time', axisLine:{lineStyle:{color:'#25324d'}}, axisLabel:{color:'#56647e'}, splitLine:{show:false}},
-    yAxis:{type:'value', scale:true, axisLabel:{color:'#56647e'}, splitLine:{lineStyle:{color:'#141c2e'}}},
-    series:[{
-      name:'权益', type:'line', showSymbol:false, smooth:true, lineStyle:{width:2,color:'#2ee59d'},
-      itemStyle:{color:'#2ee59d'}, areaStyle:{color:'rgba(46,229,157,.10)'},
-      markLine:{symbol:'none', silent:true, label:{fontSize:10},
-        data:[
-          {yAxis:null, name:'出局线', lineStyle:{color:'#ff5c7a',width:1,type:'dashed'}, label:{formatter:'出局线',color:'#ff5c7a'}},
-          {yAxis:null, name:'初始', lineStyle:{color:'#56647e',width:1,type:'dotted'}, label:{formatter:'初始',color:'#56647e'}}
-        ]}
-    }]
+    grid:{left:54,right:14,top:16,bottom:26},
+    xAxis:{type:'time',axisLine:{lineStyle:{color:'#2a3346'}},axisLabel:{color:'#5c667a'},splitLine:{show:false}},
+    yAxis:{type:'value',scale:true,axisLabel:{color:'#5c667a'},splitLine:{lineStyle:{color:'#1a2130'}}},
+    tooltip:{trigger:'axis',valueFormatter:v=>v==null?'-':Number(v).toFixed(2)},
+    series:[{type:'line',showSymbol:false,smooth:true,lineStyle:{width:2,color:'#0ecb81'},
+      itemStyle:{color:'#0ecb81'},areaStyle:{color:'rgba(14,203,129,.10)'},data:[]}]
   });
-  setChartData(history);
 }
-function setChartData(history){
-  histPts = history.map(p=>[p.ts*1000, p.equity]);
-  if (!histPts.length) return;
-  const last = histPts[histPts.length-1];
-  chart.setOption({series:[{data:histPts, markLine:{data:[
-    {yAxis: last[1]>=guard ? guard : guard, name:'出局线', lineStyle:{color:'#ff5c7a',type:'dashed'}, label:{formatter:'出局线',color:'#ff5c7a'}},
-    {yAxis: initial, name:'初始', lineStyle:{color:'#56647e',type:'dotted'}, label:{formatter:'初始',color:'#56647e'}}
-  ]}}]});
+function drawMarkLines(){
+  if(!chart)return;
+  const gl=[];
+  if(initial>0)gl.push({yAxis:initial,lineStyle:{color:'#5c667a',width:1,type:'dotted'},label:{formatter:'初始',color:'#5c667a',fontSize:10}});
+  if(guard>0)gl.push({yAxis:guard,lineStyle:{color:'#f6465d',width:1,type:'dashed'},label:{formatter:'出局线',color:'#f6465d',fontSize:10}});
+  chart.setOption({series:[{markLine:{symbol:'none',silent:true,data:gl}}]});
 }
-function pushPoint(ts, equity){
-  if (ts === lastTs) return;
-  lastTs = ts;
-  histPts.push([ts*1000, equity]);
-  if (histPts.length > 4000) histPts.shift();
-  if (!chart) return;
-  const lines = [
-    {yAxis: guard, name:'出局线', lineStyle:{color:'#ff5c7a',type:'dashed'}, label:{formatter:'出局线',color:'#ff5c7a'}},
-    {yAxis: initial, name:'初始', lineStyle:{color:'#56647e',type:'dotted'}, label:{formatter:'初始',color:'#56647e'}}];
-  chart.setOption({series:[{data:histPts, markLine:{data:lines}}]}, {lazyUpdate:true});
+function push(ts,eq){
+  if(ts===lastTs)return; lastTs=ts;
+  if(!chart)return;
+  chart.setOption({series:[{data:chart.getOption().series[0].data.concat([[ts*1000,eq]]).slice(-4000)}]},{lazyUpdate:true});
+  drawMarkLines();
 }
 
-/* ---------- 渲染快照 ---------- */
 function render(s){
-  if (!s) return;
-  // 顶栏
-  $('mode').textContent = (s.mode||'?') === 'live' ? '实盘' : '纸盘';
-  $('price').textContent = num(s.price,2);
-  $('price').className = 'price ' + (s.price > lastPx ? 'green' : s.price < lastPx ? 'red' : '');
-  lastPx = s.price;
-  $('subprice').textContent = `bid ${num(s.bid)} / ask ${num(s.ask)} · funding ${((s.funding_rate||0)*100).toFixed(4)}%`;
-  $('feedPill').textContent = s.feed_mode ? `行情 ${s.feed_mode}` : '';
+  if(!s)return;
+  const st=s.state||{}; // 未用
+  const c=s.challenge||{};
+  initial=c.initial_balance||0; guard=c.guard_level||0; peak=c.peak_equity||0;
 
-  const c = s.challenge || {};
-  initial = c.initial_balance ?? initial; guard = c.guard_level ?? guard; peak = c.peak_equity ?? peak;
-  $('roundPill').textContent = `第 ${c.round ?? '-'} 轮`;
-  $('dot').className = 'dot ' + ({running:'on', guard:'lost', timeout:'lost', stopped:''}[c.status]||'');
-  $('state').textContent = ({running:'运行中', guard:'本轮结束', timeout:'超时', stopped:'已停止'}[c.status]) || c.status || '-';
-  $('result').textContent = c.result || '';
-  $('equity').innerHTML = num(c.equity,4) + '<small> U</small>';
-  const up = (c.equity??0) >= (c.initial_balance??0);
-  $('multiple').textContent = num(c.multiple,3) + 'x';
-  $('multiple').className = 'multiple ' + (up?'up':'down');
+  $('stateTxt').textContent=((s.mode||'')==='live'?'实盘':'纸盘')+' · '+({running:'运行中',guard:'本轮结束',timeout:'超时',stopped:'已停止'}[c.status]||'');
+  $('state').className='state '+((c.status==='running'||!c.status)?'run':'');
+  $('round').textContent='第 '+(c.round||'-')+' 轮';
+  $('feed').textContent='行情 '+(s.feed_mode==='ws'?'WS':'REST');
+  $('result').textContent=c.result||'';
+  $('px').textContent=num(s.price,2);
+  $('px').className='px '+(s.price>lastPx?'g':s.price<lastPx?'r':'');
+  lastPx=s.price;
+  $('pxsub').textContent=`B ${num(s.bid)}  A ${num(s.ask)}  资金费 ${((s.funding_rate||0)*100).toFixed(4)}%`;
 
-  // 距出局线的安全空间
-  const roomPct = (guard && peak>guard) ? Math.max(0,Math.min(100,(c.equity-guard)/(peak-guard)*100)) : 0;
-  $('meterFill').style.width = roomPct + '%';
-  $('meterLeft').textContent = `安全空间 ${num(c.equity-guard,2)} U`;
-  $('meterRight').textContent = `峰值 ${num(peak,2)}`;
+  const up=(c.equity||0)>=(initial||0);
+  $('kEquity').textContent=num(c.equity,2)+' U · '+num(c.multiple,2)+'x';
+  $('kEquity').className='v big '+(up?'g':'');
+  $('kGuard').textContent=num(guard,2);
+  $('kRoom').textContent=num((c.equity||0)-guard,2)+' U';
+  $('kPeak').textContent=num(peak,2);
+  $('kDD').textContent=num(c.drawdown_pct,1)+'% / '+num(c.tolerance_pct,1)+'%';
+  $('kInit').textContent=num(initial,2);
+  const room=(guard&&peak>guard)?Math.max(0,Math.min(100,(c.equity-guard)/(peak-guard)*100)):0;
+  $('meter').style.width=room+'%';
 
-  $('kvInitial').textContent = num(c.initial_balance,4);
-  $('kvPeak').textContent = num(peak,4);
-  $('kvDD').textContent = num(c.drawdown_pct,2) + ' %';
-  $('kvDD').className = 'v ' + (((c.drawdown_pct||0) > (c.tolerance_pct||30)*0.7) ? 'warn' : '');
-  $('kvTol').textContent = num(c.tolerance_pct,1) + ' %';
-  $('kvGuard').textContent = num(guard,4);
-  $('kvRoom').textContent = num(c.equity - guard, 2);
+  const p=s.position||{}, side=p.side||'flat';
+  $('posSide').textContent=side==='long'?'多仓':side==='short'?'空仓':'空仓';
+  $('posSide').className=(side==='long'?'g':side==='short'?'r':'')+'';
+  $('posSide').style.color=side==='long'?'var(--green)':side==='short'?'var(--red)':'var(--dim)';
+  $('pSize').textContent=p.size_eth?num(p.size_eth,4)+' ETH':'-';
+  $('pNotional').textContent=num(p.notional_usdt,2)+' U';
+  $('pEntry').textContent=num(p.entry,2);
+  $('pCostPx').textContent=num(p.cost_price,2);
+  $('pLiq').textContent=num(p.liq_px,2);
+  $('pMargin').textContent=num(p.margin_usdt,4)+' U';
+  $('pUpl').textContent=sgn(p.unrealized_pnl,2)+' U';
+  $('pUpl').className='val '+c3(p.unrealized_pnl||0);
 
-  // 持仓
-  const p = s.position || {};
-  const side = p.side || 'flat';
-  $('posSide').textContent = side==='long' ? '多仓 ▲' : side==='short' ? '空仓 ▼' : '空仓';
-  $('posSide').className = 'pos-main ' + (side==='long'?'green':side==='short'?'red':'');
-  $('posSize').textContent = p.size_eth ? num(p.size_eth,4)+' ETH' : '-';
-  $('posNotional').textContent = num(p.notional_usdt,2) + ' U';
-  $('posEntry').textContent = num(p.entry,2);
-  $('posCostPx').textContent = num(p.cost_price,2);
-  $('posLiq').textContent = num(p.liq_px,2);
-  $('posMargin').textContent = num(p.margin_usdt,4) + ' U';
-  $('posCost').textContent = num(p.cost_usdt,4) + ' U';
-  $('posUpl').textContent = sgn(p.unrealized_pnl,4) + ' U';
-  $('posUpl').className = 'v ' + cls(p.unrealized_pnl||0);
-
-  // 钱包
-  const w = s.wallet;
-  if (w) {
-    $('walBalance').textContent = num(w.balance,4) + ' U';
-    $('walMargin').textContent = num(w.margin_locked,4) + ' U';
-    $('walPnl').textContent = sgn(w.realized_pnl,4) + ' U';
-    $('walPnl').className = 'v ' + cls(w.realized_pnl||0);
-    $('walFees').textContent = num(w.fees_paid,4) + ' U';
-    $('walFunding').textContent = num(w.funding_paid,4) + ' U';
-    $('walBuyable').textContent = num(s.buyable_usdt,2) + ' U';
-    $('modeHint').textContent = '初始 ' + num(w.initial_balance,4) + ' U';
-  } else {
-    $('walBalance').textContent = num(s.buyable_usdt,2) + ' U（可用×杠杆）';
+  const w=s.wallet;
+  if(w){
+    $('wInit').textContent=num(w.initial_balance,2)+' U';
+    $('wBal').textContent=num(w.balance,2)+' U';
+    $('wMargin').textContent=num(w.margin_locked,4)+' U';
+    $('wPnl').textContent=sgn(w.realized_pnl,2)+' U';
+    $('wPnl').className='val '+c3(w.realized_pnl||0);
+    $('wFees').textContent=num(w.fees_paid,3)+' / '+num(w.funding_paid,3)+' U';
+    $('wBuyable').textContent=num(s.buyable_usdt,2)+' U';
   }
-  if (s.challenge && s.challenge.equity) pushPoint(s.ts, s.challenge.equity);
+  if(c.equity!=null)push(s.ts,c.equity);
 }
 
-/* ---------- 数据加载 ---------- */
+function showTab(which){
+  $('tabTrades').className=which==='trades'?'on':'';
+  $('tabRuns').className=which==='runs'?'on':'';
+  $('tradesBox').style.display=which==='trades'?'':'none';
+  $('runsBox').style.display=which==='runs'?'':'none';
+}
 async function loadTrades(){
-  const rows = await (await fetch('/api/trades?limit=60')).json();
-  const tb = $('tradesTb').querySelector('tbody');
-  tb.innerHTML = rows.map(t=>`<tr>
-    <td class="dim">${fmtTs(t.ts)}</td>
-    <td><span class="side ${t.side||'flat'}">${t.side==='long'?'多':t.side==='short'?'空':'平'}</span></td>
-    <td>${num(t.size_eth,4)}</td><td>${num(t.entry,2)}</td><td>${num(t.exit,2)}</td>
-    <td class="${cls(t.pnl)}">${sgn(t.pnl,4)}</td><td class="reason">${t.reason||''}</td></tr>`).join('');
+  try{
+    const rows=await(await fetch('/api/trades?limit=40')).json();
+    $('tradesBox').querySelector('tbody').innerHTML=rows.map(t=>`<tr>
+      <td class="faint">${fmtTs(t.ts)}</td>
+      <td><span class="side ${t.side||''}">${t.side==='long'?'多':t.side==='short'?'空':'平'}</span></td>
+      <td>${num(t.size_eth,4)}</td><td>${num(t.entry,2)}</td><td>${num(t.exit,2)}</td>
+      <td class="${c3(t.pnl)}">${sgn(t.pnl,2)}</td><td class="dim">${t.reason||''}</td></tr>`).join('');
+  }catch(e){}
 }
 async function loadRuns(){
-  const rows = await (await fetch('/api/runs')).json();
-  const tb = $('runsTb').querySelector('tbody');
-  tb.innerHTML = rows.map(r=>`<tr>
-    <td class="dim">${r.id}</td>
-    <td>${r.mode==='paper'?'纸盘':r.mode==='live'?'实盘':'回测'}</td>
-    <td>${num(r.initial_balance,2)}</td>
-    <td class="${cls((r.final_equity||0)-(r.initial_balance||0))}">${r.final_equity!=null?num(r.final_equity/r.initial_balance,3)+'x':'-'}</td>
-    <td class="reason">${({running:'运行中',guard:'结束',timeout:'超时',stopped:'停止',end_of_data:'数据完'}[r.status]||r.status)}</td></tr>`).join('');
+  try{
+    const rows=await(await fetch('/api/runs')).json();
+    $('runsBox').querySelector('tbody').innerHTML=rows.map(r=>`<tr>
+      <td class="faint">${r.id}</td>
+      <td>${r.mode==='paper'?'纸盘':r.mode==='live'?'实盘':'回测'}</td>
+      <td>${num(r.initial_balance,2)}</td>
+      <td class="${c3((r.final_equity||0)-(r.initial_balance||0))}">${r.final_equity!=null?num(r.final_equity/r.initial_balance,2)+'x':'-'}</td>
+      <td class="dim">${({running:'运行中',guard:'结束',timeout:'超时',stopped:'停止',end_of_data:'数据完'}[r.status]||r.status)}</td></tr>`).join('');
+  }catch(e){}
 }
-
-/* ---------- WS ---------- */
 function connectWS(){
-  const ws = new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
-  ws.onmessage = e => render(JSON.parse(e.data));
-  ws.onclose = () => setTimeout(connectWS, 3000); // 断线自动重连
-  ws.onerror  = () => ws.close();
+  const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
+  ws.onmessage=e=>render(JSON.parse(e.data));
+  ws.onclose=()=>setTimeout(connectWS,3000);
+  ws.onerror=()=>ws.close();
 }
-
 async function init(){
-  // 分步容错：任何一步失败都不能阻断数据字段渲染（echarts 缺失/API 异常均降级）
-  let hist = [], s0 = null;
-  try { hist = await (await fetch('/api/equity?limit=4000')).json() || []; } catch(e){ console.warn('equity', e); }
-  try { s0 = await (await fetch('/api/status')).json(); } catch(e){ console.warn('status', e); }
-  if (s0 && s0.challenge) { initial = s0.challenge.initial_balance; guard = s0.challenge.guard_level; peak = s0.challenge.peak_equity; }
-  try {
-    initChart(hist);
-  } catch(e){
-    console.warn('chart unavailable', e);
-    $('chart').innerHTML = '<div class="empty">图表不可用（不影响数据）</div>';
+  let s0=null, hist=[];
+  try{s0=await(await fetch('/api/status')).json();}catch(e){console.warn(e);}
+  if(s0&&s0.challenge){initial=s0.challenge.initial_balance;guard=s0.challenge.guard_level;peak=s0.challenge.peak_equity;}
+  try{
+    initChart();
+    drawMarkLines();
+    hist=await(await fetch('/api/equity?limit=4000')).json();
+    if(Array.isArray(hist)&&hist.length)chart.setOption({series:[{data:hist.map(p=>[p.ts*1000,p.equity])}]});
+  }catch(e){
+    console.warn('chart:',e);
+    $('chart').innerHTML='<div class="empty">图表不可用</div>';
   }
-  try { loadTrades(); } catch(e){ console.warn('trades', e); }
-  try { loadRuns(); } catch(e){ console.warn('runs', e); }
   render(s0);
+  loadTrades();loadRuns();
   connectWS();
-  setInterval(loadTrades, 30000);
-  setInterval(loadRuns, 30000);
-  window.addEventListener('resize', ()=>chart && chart.resize());
+  setInterval(loadTrades,30000);
+  setInterval(loadRuns,30000);
+  window.addEventListener('resize',()=>chart&&chart.resize());
 }
 init();
 </script>

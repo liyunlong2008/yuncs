@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 
 class ChallengeConfig(BaseModel):
-    """10u 战神玩法：无胜利点，动态回撤线保护，进程内自动连续轮次。
+    """无胜利点玩法：动态回撤线保护，进程内自动连续轮次。
 
     出局线 = 运营峰值 × (1 - 容忍率)；容忍率随权益倍数平滑收紧：
     1x→base_drawdown_pct，tight_start_multiple 倍→tight_drawdown_pct，之后保持。

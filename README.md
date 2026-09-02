@@ -1,4 +1,4 @@
-# yuncs — OKX ETH 永续 10u 战神挑战赛机器人
+# yuncs — OKX ETH-USDT-SWAP 永续量化机器人
 
 > 开发/维护前先读 [AGENTS.md](AGENTS.md)——项目硬约束、已验证的 OKX 数据、踩坑记录都固化在里面。
 
