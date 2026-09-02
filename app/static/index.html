@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>yuncs · ETH 10u战神</title>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="echarts.min.js"></script>
 <style>
   :root {
     --bg:#0b0f17; --card:#121826; --card2:#0e1420; --line:#1f2a40; --line2:#25324d;
@@ -324,15 +324,21 @@ function connectWS(){
 }
 
 async function init(){
-  // 全量初始化：历史权益曲线 + 当前快照
-  const hist = await (await fetch('/api/equity?limit=4000')).json();
-  const s0 = await (await fetch('/api/status')).json();
+  // 分步容错：任何一步失败都不能阻断数据字段渲染（echarts 缺失/API 异常均降级）
+  let hist = [], s0 = null;
+  try { hist = await (await fetch('/api/equity?limit=4000')).json() || []; } catch(e){ console.warn('equity', e); }
+  try { s0 = await (await fetch('/api/status')).json(); } catch(e){ console.warn('status', e); }
   if (s0 && s0.challenge) { initial = s0.challenge.initial_balance; guard = s0.challenge.guard_level; peak = s0.challenge.peak_equity; }
-  initChart(hist);
-  loadTrades(); loadRuns();
+  try {
+    initChart(hist);
+  } catch(e){
+    console.warn('chart unavailable', e);
+    $('chart').innerHTML = '<div class="empty">图表不可用（不影响数据）</div>';
+  }
+  try { loadTrades(); } catch(e){ console.warn('trades', e); }
+  try { loadRuns(); } catch(e){ console.warn('runs', e); }
   render(s0);
   connectWS();
-  // 成交/轮次历史每 30s 刷新一次（WS 不推这两类）
   setInterval(loadTrades, 30000);
   setInterval(loadRuns, 30000);
   window.addEventListener('resize', ()=>chart && chart.resize());
