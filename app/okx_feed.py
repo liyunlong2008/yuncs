@@ -37,7 +37,7 @@ class OkxFeed:
     def __init__(self, cfg: ExchangeConfig, secrets: Secrets, timeframe: str = "1m"):
         self.cfg = cfg
         self.timeframe = timeframe
-        params: dict[str, Any] = {"enableRateLimit": True}
+        params: dict[str, Any] = {"enableRateLimit": True, "timeout": 30000}
         if cfg.proxy:
             params["aiohttp_proxy"] = cfg.proxy
         if secrets.api_key:
@@ -45,6 +45,9 @@ class OkxFeed:
             params["secret"] = secrets.api_secret
             params["password"] = secrets.passphrase
         self.exchange = ccxtpro.okx(params)
+        # 只加载 swap 市场；关闭 currencies 预拉（base load_markets 会调私有 /asset/currencies，本项目用不到）
+        self.exchange.has["fetchCurrencies"] = False
+        self.exchange.options.setdefault("fetchMarkets", {})["types"] = ["swap"]
         self.spec = InstrumentSpec()
         self.taker_fee = cfg.taker_fee
         self.maker_fee = cfg.maker_fee
@@ -159,6 +162,17 @@ class OkxFeed:
             asyncio.create_task(self._poll_funding()),
         ]
 
+    def _bar_duration_ms(self) -> int:
+        """周期时长(ms)：'1m'->60000, '5m'->300000 ... 未知周期兜底 1m。"""
+        tf = (self.timeframe or "1m").lower()
+        unit = tf[-1]
+        try:
+            n = int(tf[:-1])
+        except ValueError:
+            return 60_000
+        mult = {"m": 60_000, "h": 3_600_000, "d": 86_400_000, "s": 1000}.get(unit, 60_000)
+        return n * mult
+
     async def _poll_price(self) -> None:
         while True:
             try:
@@ -174,13 +188,15 @@ class OkxFeed:
             await asyncio.sleep(2)
 
     async def _poll_ohlcv(self) -> None:
+        bar_ms = self._bar_duration_ms()
         while True:
             try:
                 candles = await self.exchange.fetch_ohlcv(self.cfg.symbol, self.timeframe, limit=10)
                 self.candles = candles
-                for c in candles[:-1]:
+                now_ms = int(time.time() * 1000)
+                for c in candles:
                     ts = float(c[0])
-                    if ts > self.last_closed_ts:
+                    if ts > self.last_closed_ts and ts <= now_ms - bar_ms:
                         self.last_closed_ts = ts
                         bar = {"ts": ts, "o": float(c[1]), "h": float(c[2]),
                                "l": float(c[3]), "c": float(c[4]), "v": float(c[5])}
@@ -252,19 +268,23 @@ class OkxFeed:
                 await asyncio.sleep(2)
 
     async def _loop_ohlcv(self) -> None:
-        timeframe = self.timeframe or "1m"
+        bar_ms = self._bar_duration_ms()
         while True:
             try:
-                candles = await self.exchange.watch_ohlcv(self.cfg.symbol, timeframe)
+                candles = await self.exchange.watch_ohlcv(self.cfg.symbol, self.timeframe or "1m")
                 self._last_ws_ts = time.time()
                 self.candles = candles
-                for c in candles[:-1]:  # 最后一根是进行中
+                # WS 推送是增量数据，不能假设最后一根"进行中"；
+                # 统一按时间判断是否已收盘（ts <= 当前时间 - 周期），避免把刚收盘的 K 线漏掉
+                now_ms = int(time.time() * 1000)
+                for c in candles:
                     ts = float(c[0])
-                    if ts > self.last_closed_ts:
+                    if ts > self.last_closed_ts and ts <= now_ms - bar_ms:
                         self.last_closed_ts = ts
                         bar = {"ts": ts, "o": float(c[1]), "h": float(c[2]),
                                "l": float(c[3]), "c": float(c[4]), "v": float(c[5])}
                         self.price = bar["c"]
+                        logger.info(f"新 K 线 {self.timeframe} 收盘 {bar['c']:.2f} @ {ts}")
                         await self._emit("bar", bar)
             except asyncio.CancelledError:
                 raise
