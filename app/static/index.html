@@ -40,7 +40,8 @@
   table{width:100%;border-collapse:collapse;font-size:14px}
   td{padding:7px 2px;text-align:right;border-bottom:1px solid #f4f5f7}
   td:first-child{text-align:left;color:var(--faint);font-size:13px}
-  th{display:none}
+  th{font-size:12px;color:var(--faint);font-weight:400;text-align:right;padding:4px 2px;border-bottom:1px solid var(--line)}
+  th:first-child{text-align:left}
   .sd{font-weight:600}
   .sd.long{color:var(--green)}.sd.short{color:var(--red)}
 </style>
@@ -66,10 +67,20 @@
       <div><span class="k">安全空间</span><span class="v n" id="room">-</span></div>
     </div>
     <div class="rows">
-      <div id="posRow" style="display:none"></div>
       <div><span class="k">可用余额</span><span class="n" id="bal">-</span></div>
       <div><span class="k">已实现盈亏</span><span class="n" id="pnl">-</span></div>
       <div><span class="k">手续费 / 资金费</span><span class="n" id="fees">-</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>当前持仓</h3>
+    <div style="font-size:20px;font-weight:700" id="posLine">空仓</div>
+    <div class="rows">
+      <div><span class="k">数量 / 名义价值</span><span class="n" id="pSz">-</span></div>
+      <div><span class="k">开仓价 / 成本价</span><span class="n" id="pEp">-</span></div>
+      <div><span class="k">强平价</span><span class="n r" id="pLq">-</span></div>
+      <div><span class="k">未实现盈亏</span><span class="n" id="pUp">-</span></div>
     </div>
   </div>
 
@@ -80,12 +91,12 @@
 
   <div class="card">
     <h3>最近成交</h3>
-    <table><tbody id="trades"></tbody></table>
+    <table><thead><tr><th>时间</th><th>方向</th><th>数量</th><th>开仓价</th><th>盈亏</th></tr></thead><tbody id="trades"></tbody></table>
   </div>
 
   <div class="card">
     <h3>轮次</h3>
-    <table><tbody id="runs"></tbody></table>
+    <table><thead><tr><th>轮次</th><th>结束倍数</th><th>盈亏</th><th>状态</th></tr></thead><tbody id="runs"></tbody></table>
   </div>
 </main>
 
@@ -138,12 +149,18 @@ function render(s){
     $('pnl').className='n '+cl(w.realized_pnl||0);
     $('fees').textContent=n(w.fees_paid,3)+' / '+n(w.funding_paid,3)+' USDT';
   }
-  const posRow=$('posRow');
-  if(p&&p.side&&p.size_eth){
-    posRow.style.display='flex';
-    const sideTxt=p.side==='long'?'多':'空';
-    posRow.innerHTML='<span class="k">持仓 <b class="sd '+(p.side==='long'?'long':'short')+'">'+sideTxt+'</b> '+n(p.size_eth,4)+' ETH @ '+n(p.entry,2)+'（强平 '+n(p.liq_px,2)+'）</span><span class="n '+cl(p.unrealized_pnl||0)+'">'+s2(p.unrealized_pnl,2)+'</span>';
-  }else posRow.style.display='none';
+  const open=p&&p.side&&p.size_eth;
+  const line=$('posLine');
+  if(open){
+    const t=p.side==='long'?'多仓':'空仓';
+    line.textContent=t+' '+n(p.size_eth,4)+' ETH';
+    line.style.color=p.side==='long'?'var(--green)':'var(--red)';
+  }else{line.textContent='空仓';line.style.color='var(--faint)';}
+  $('pSz').textContent=(open?n(p.size_eth,4)+' ETH':'无')+' / '+n(p.notional_usdt,2)+' USDT';
+  $('pEp').textContent=open?n(p.entry,2)+' / '+n(p.cost_price,2):'-';
+  $('pLq').textContent=open?n(p.liq_px,2):'-';
+  $('pUp').textContent=open?s2(p.unrealized_pnl,2)+' USDT':'-';
+  $('pUp').className='n '+(open?(p.unrealized_pnl>0?'g':p.unrealized_pnl<0?'r':''):'');
   if(c.equity!=null)push(s.ts,c.equity);
 }
 async function loadTrades(){

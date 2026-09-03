@@ -80,7 +80,7 @@ class OkxFeed:
             try:
                 await fn(payload)
             except Exception as e:  # 订阅方异常不影响行情循环
-                logger.warning(f"handler {channel} 异常: {e}")
+                logger.exception(f"handler {channel} 异常: {e}")
 
     # ---------- 规格与费率（启动时调用） ----------
     async def load_spec_and_fees(self) -> None:
@@ -332,7 +332,9 @@ class OkxFeed:
         bars = [{"ts": float(c[0]), "o": float(c[1]), "h": float(c[2]),
                  "l": float(c[3]), "c": float(c[4]), "v": float(c[5])} for c in raw]
         if bars:
-            self.last_closed_ts = bars[-1]["ts"]
+            # 最后一根可能是"进行中"，last_closed_ts 取已收盘的倒数第二根，避免吞掉紧接着要收盘的那根
+            closed = bars[-2] if len(bars) > 1 else bars[-1]
+            self.last_closed_ts = closed["ts"]
             self.price = bars[-1]["c"]
         return bars
 
