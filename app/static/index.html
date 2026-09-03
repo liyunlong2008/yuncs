@@ -120,10 +120,10 @@
   <table style="margin-top:8px"><thead><tr><th>时间</th><th>方向</th><th>金额</th><th>开仓价</th><th>盈亏</th></tr></thead><tbody id="trades"></tbody></table>
 </section>
 
-<!-- 轮次 -->
+<!-- 周期历史 -->
 <section style="border-bottom:none">
-  <h3>轮次</h3>
-  <table style="margin-top:8px"><thead><tr><th>轮次</th><th>结果</th><th>状态</th></tr></thead><tbody id="runs"></tbody></table>
+  <h3>周期历史</h3>
+  <table style="margin-top:8px"><thead><tr><th>周期</th><th>开始</th><th>结果（USDT / 收益率）</th><th>状态</th></tr></thead><tbody id="runs"></tbody></table>
 </section>
 
 <script>
@@ -160,7 +160,7 @@ function render(s){
   $('pxinfo').textContent='买 '+n(s.bid)+'　卖 '+n(s.ask)+'　资金费率 '+((s.funding_rate||0)*100).toFixed(4)+'%';
   const stTxt={running:'运行中',guard:'本轮结束',timeout:'超时',stopped:'已停止'}[c.status]||'';
   $('st').innerHTML='<span class="d"></span>'+(s.mode==='live'?'实盘':'纸盘')+' · '+stTxt;
-  $('round').textContent='第 '+(c.round||'-')+' 轮';
+  $('round').textContent='第 '+(c.round||'-')+' 周期';
 
   // 账户权益
   const w=s.wallet;
@@ -218,14 +218,20 @@ async function loadTrades(){
 }
 async function loadRuns(){
   try{
-    const r=await(await fetch('/api/runs?limit=6')).json();
+    const r=await(await fetch('/api/runs?limit=8')).json();
     $('runs').innerHTML=r.map(x=>{
+      const t0=x.started?new Date(x.started*1000):null;
+      const ds=t0?`${String(t0.getMonth()+1).padStart(2,'0')}-${String(t0.getDate()).padStart(2,'0')} ${String(t0.getHours()).padStart(2,'0')}:${String(t0.getMinutes()).padStart(2,'0')}`:'-';
       const d=(x.final_equity||0)-(x.initial_balance||0);
       const pc=x.initial_balance?(d/x.initial_balance*100):0;
-      return `<tr>
+      let st={running:'运行中',timeout:'超时',stopped:'手动停止',end_of_data:'数据未完'}[x.status]||x.status;
+      if(x.status==='guard')st=(x.result||'').includes('锁利')?'锁利结束':'止损结束';
+      const detail=(x.result&&x.status!=='running')?x.result:st;
+      return `<tr title="${detail}">
       <td class="lb">${x.id}</td>
-      <td class="n ${cl(d)}">${x.final_equity!=null?s2(d,2)+' ('+(pc>=0?'+':'')+pc.toFixed(1)+'%)':'-'}</td>
-      <td>${({running:'运行中',guard:'结束',timeout:'超时',stopped:'停止',end_of_data:'数据完'}[x.status]||x.status)}</td></tr>`;
+      <td class="lb">${ds}</td>
+      <td class="n ${cl(d)}">${x.final_equity!=null?s2(d,2)+'（'+(pc>=0?'+':'')+pc.toFixed(1)+'%）':'-'}</td>
+      <td>${st}</td></tr>`;
     }).join('');
   }catch(e){}
 }
