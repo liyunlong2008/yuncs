@@ -88,11 +88,11 @@
   </div>
 </section>
 
-<!-- 当前持仓 -->
-<section>
-  <h3>ETH 永续
-    <span class="bd gray" id="posSideBd">空仓</span>
-    <span class="bd gray" id="levBd">-x</span>
+<!-- 当前持仓：空仓时整卡隐藏 -->
+<section id="posCard" style="display:none">
+  <h3>当前持仓
+    <span class="bd" id="posSideBd"></span>
+    <span class="bd gray" id="levBd"></span>
   </h3>
   <div class="pnlrow">
     <span class="lb" style="font-size:13px">未实现盈亏</span>
@@ -178,28 +178,30 @@ function render(s){
   $('guard').textContent=n(c.guard_level,2);
   $('room').textContent=n((c.equity||0)-(c.guard_level||0),2)+' USDT';
 
-  // 持仓
+  // 持仓：空仓整卡隐藏
   const open=p&&p.side&&p.size_eth;
+  const card=$('posCard');
   const bd=$('posSideBd');
   if(open){
+    card.style.display='';
     bd.textContent=p.side==='long'?'做多':'做空';
     bd.className='bd '+(p.side==='long'?'long':'short');
-  }else{bd.textContent='空仓';bd.className='bd gray';}
-  $('levBd').textContent=(s.leverage||'-')+'x';
-  const upl=open?(p.unrealized_pnl||0):null;
-  const pn=$('posPnl');
-  if(upl!=null){
+    $('levBd').textContent=(s.leverage||'-')+'x';
+    $('pSz').textContent=n(p.notional_usdt,1);
+    $('pMg').textContent=n(p.margin_usdt,2);
+    $('pEp').textContent=n(p.entry,2);
+    $('pMk').textContent=n(p.mark||s.price,2);
+    $('pLq').textContent=n(p.liq_px,2);
+    const upl=p.unrealized_pnl||0, mg=p.margin_usdt||0;
+    const pn=$('posPnl');
     pn.textContent=s2(upl,2);
     pn.className='big n '+(upl>0?'g':upl<0?'r':'');
-  }else{pn.textContent='--';pn.className='big n lb';}
-  $('pSz').textContent=open?n(p.notional_usdt,1):'--';
-  $('pMg').textContent=open?n(p.margin_usdt,2):'--';
-  const mg=open?(p.margin_usdt||0):0;
-  $('pRoR').textContent=(upl!=null&&mg>0)?((upl/mg*100>=0?'+':'')+(upl/mg*100).toFixed(2)+'%'):(open?'--':'--');
-  $('pRoR').className='v n '+((upl||0)>0?'g':(upl||0)<0?'r':'');
-  $('pEp').textContent=open?n(p.entry,2):'--';
-  $('pMk').textContent=n(p.mark||s.price,2);
-  $('pLq').textContent=open?n(p.liq_px,2):'--';
+    const rr=mg>0?(upl/mg*100):0;
+    $('pRoR').textContent=(rr>=0?'+':'')+rr.toFixed(2)+'%';
+    $('pRoR').className='v n '+(rr>0?'g':rr<0?'r':'');
+  }else{
+    card.style.display='none';
+  }
 
   if(c.equity!=null)push(s.ts,c.equity);
 }
