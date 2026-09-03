@@ -98,6 +98,7 @@ class Broker:
     def snapshot(self, mark: float) -> dict:
         return {
             "mode": self.mode,
+            "leverage": self.risk.leverage,
             "price": round(mark, 2),
             "position": self.position.to_dict(mark),
             "buyable_usdt": round(self.buyable_usdt(), 2),

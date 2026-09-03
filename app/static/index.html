@@ -77,8 +77,8 @@
     <h3>当前持仓</h3>
     <div style="font-size:20px;font-weight:700" id="posLine">空仓</div>
     <div class="rows">
-      <div><span class="k">数量 / 名义价值</span><span class="n" id="pSz">-</span></div>
-      <div><span class="k">开仓价 / 成本价</span><span class="n" id="pEp">-</span></div>
+      <div><span class="k">开仓均价</span><span class="n" id="pEp">-</span></div>
+      <div><span class="k">杠杆</span><span class="n" id="pLev">-</span></div>
       <div><span class="k">强平价</span><span class="n r" id="pLq">-</span></div>
       <div><span class="k">未实现盈亏</span><span class="n" id="pUp">-</span></div>
     </div>
@@ -91,12 +91,12 @@
 
   <div class="card">
     <h3>最近成交</h3>
-    <table><thead><tr><th>时间</th><th>方向</th><th>数量</th><th>开仓价</th><th>盈亏</th></tr></thead><tbody id="trades"></tbody></table>
+    <table><thead><tr><th>时间</th><th>方向</th><th>金额</th><th>开仓价</th><th>盈亏</th></tr></thead><tbody id="trades"></tbody></table>
   </div>
 
   <div class="card">
     <h3>轮次</h3>
-    <table><thead><tr><th>轮次</th><th>结束倍数</th><th>盈亏</th><th>状态</th></tr></thead><tbody id="runs"></tbody></table>
+    <table><thead><tr><th>轮次</th><th>结果</th><th>状态</th></tr></thead><tbody id="runs"></tbody></table>
   </div>
 </main>
 
@@ -135,8 +135,9 @@ function render(s){
   $('st').innerHTML='<span class="d"></span>'+(s.mode==='live'?'实盘':'纸盘')+' · '+st;
   $('round').textContent='第 '+(c.round||'-')+' 轮';
   $('equity').textContent=n(c.equity,2);
-  $('mult').textContent=n(c.multiple,2)+' 倍';
-  $('mult').className='tag '+(c.equity>=(c.initial_balance||0)?'up':'down');
+  const r0=c.initial_balance||1,pct=(c.equity-r0)/r0*100;
+  $('mult').textContent=(pct>=0?'+':'')+pct.toFixed(1)+'%';
+  $('mult').className='tag '+(pct>=0?'up':'down');
   $('guard').textContent=n(c.guard_level,2);
   $('peak').textContent=n(c.peak_equity,2);
   $('dd').textContent=n(c.drawdown_pct,1)+'%';
@@ -152,15 +153,16 @@ function render(s){
   const open=p&&p.side&&p.size_eth;
   const line=$('posLine');
   if(open){
-    const t=p.side==='long'?'多仓':'空仓';
-    line.textContent=t+' '+n(p.size_eth,4)+' ETH';
+    const t=p.side==='long'?'做多':'做空';
+    line.textContent=t+' '+n(p.notional_usdt,1)+' USDT';
     line.style.color=p.side==='long'?'var(--green)':'var(--red)';
   }else{line.textContent='空仓';line.style.color='var(--faint)';}
-  $('pSz').textContent=(open?n(p.size_eth,4)+' ETH':'无')+' / '+n(p.notional_usdt,2)+' USDT';
-  $('pEp').textContent=open?n(p.entry,2)+' / '+n(p.cost_price,2):'-';
+  $('pEp').textContent=open?n(p.entry,2):'-';
+  $('pLev').textContent=(s.leverage||'-')+' x';
   $('pLq').textContent=open?n(p.liq_px,2):'-';
-  $('pUp').textContent=open?s2(p.unrealized_pnl,2)+' USDT':'-';
-  $('pUp').className='n '+(open?(p.unrealized_pnl>0?'g':p.unrealized_pnl<0?'r':''):'');
+  const upl=open?(p.unrealized_pnl||0):0, mg=open?(p.margin_usdt||0):0;
+  $('pUp').textContent=open?(s2(upl,2)+' USDT'+(mg>0?'  ('+((upl/mg*100)>=0?'+':'')+(upl/mg*100).toFixed(1)+'%)':'')):'-';
+  $('pUp').className='n '+(open?(upl>0?'g':upl<0?'r':''):'');
   if(c.equity!=null)push(s.ts,c.equity);
 }
 async function loadTrades(){
@@ -169,7 +171,7 @@ async function loadTrades(){
     $('trades').innerHTML=r.map(t=>`<tr>
       <td>${tm(t.ts)}</td>
       <td><span class="sd ${t.side||''}">${t.side==='long'?'开多':t.side==='short'?'开空':'平仓'}</span></td>
-      <td class="n">${n(t.size_eth,4)}</td>
+      <td class="n">${n(t.size_eth*t.entry,1)}</td>
       <td class="n">${n(t.entry,1)}</td>
       <td class="n ${cl(t.pnl)}">${s2(t.pnl,2)}</td></tr>`).join('')||'<tr><td class="faint">暂无成交</td></tr>';
   }catch(e){}
@@ -177,11 +179,14 @@ async function loadTrades(){
 async function loadRuns(){
   try{
     const r=await(await fetch('/api/runs?limit=6')).json();
-    $('runs').innerHTML=r.map(x=>`<tr>
+    $('runs').innerHTML=r.map(x=>{
+      const d=(x.final_equity||0)-(x.initial_balance||0);
+      const pc=x.initial_balance?(d/x.initial_balance*100):0;
+      return `<tr>
       <td>${x.id}</td>
-      <td class="n">${x.final_equity!=null?n(x.final_equity/x.initial_balance,2)+' 倍':'-'}</td>
-      <td class="n ${cl((x.final_equity||0)-(x.initial_balance||0))}">${x.final_equity!=null?s2(x.final_equity-x.initial_balance,2):'-'}</td>
-      <td>${({running:'运行中',guard:'结束',timeout:'超时',stopped:'停止',end_of_data:'数据完'}[x.status]||x.status)}</td></tr>`).join('');
+      <td class="n ${cl(d)}">${x.final_equity!=null?s2(d,2)+' ('+(pc>=0?'+':'')+pc.toFixed(1)+'%)':'-'}</td>
+      <td>${({running:'运行中',guard:'结束',timeout:'超时',stopped:'停止',end_of_data:'数据完'}[x.status]||x.status)}</td></tr>`;
+    }).join('');
   }catch(e){}
 }
 function ws(){
