@@ -68,6 +68,7 @@ class OkxFeed:
         self._tasks: list[asyncio.Task] = []
         self._rest_mode = False  # 当前是否运行在 REST 轮询模式
         self._funding_logged: float | None = None  # 上次记日志的费率（防刷屏）
+        self._ob_ts = 0.0  # 盘口快照时间（REST 模式判断新鲜度）
         self._last_ws_ts = 0.0   # 最近一次 WS 收到数据的时间
         self.feed_mode = cfg.feed or "auto"
 
@@ -202,6 +203,7 @@ class OkxFeed:
                         bar = {"ts": ts, "o": float(c[1]), "h": float(c[2]),
                                "l": float(c[3]), "c": float(c[4]), "v": float(c[5])}
                         self.price = bar["c"]
+                        logger.info(f"新 K 线 {self.timeframe} 收盘 {bar['c']:.2f} @ {ts}")
                         await self._emit("bar", bar)
             except asyncio.CancelledError:
                 raise
@@ -224,12 +226,19 @@ class OkxFeed:
                 logger.warning(f"REST funding 拉取失败: {e}")
             await asyncio.sleep(300)
 
-    async def ensure_order_book(self) -> None:
-        """下单前保证有最新盘口（REST 模式下按需拉取；WS 模式下已持续更新）。"""
-        if self.order_book is None:
+    async def ensure_order_book(self, max_age_s: float = 10.0) -> None:
+        """下单前保证有新鲜盘口。
+
+        - WS 模式：盘口持续推送，直接复用
+        - REST 模式：缓存超 max_age_s 就重拉（否则会用旧价撮合，曾致开仓价比市价差 17U）
+        """
+        stale = self._rest_mode and self.order_book is not None and \
+            time.time() - self._ob_ts > max_age_s
+        if self.order_book is None or stale:
             try:
                 ob = await self.exchange.fetch_order_book(self.cfg.symbol, 20)
                 self.order_book = ob
+                self._ob_ts = time.time()
                 if ob["bids"]:
                     self.bid = float(ob["bids"][0][0])
                 if ob["asks"]:
@@ -257,6 +266,7 @@ class OkxFeed:
                 ob = await self.exchange.watch_order_book(self.cfg.symbol, 20)
                 self._last_ws_ts = time.time()
                 self.order_book = ob
+                self._ob_ts = time.time()
                 if ob["bids"]:
                     self.bid = float(ob["bids"][0][0])
                 if ob["asks"]:
