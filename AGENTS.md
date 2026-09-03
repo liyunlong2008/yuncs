@@ -40,6 +40,7 @@ OKX ETH-USDT-SWAP 小资金挑战赛量化机器人（无胜利点、动态出�
 - OKX 的 `after`/`before` 参数**必须是整数 ms 时间戳**，float 报 `51000 Parameter after error`
 - OKX 历史 K 线返回**数组** `[ts,o,h,l,c,vol,...]`，不是 dict
 - **ccxt.pro 的 WS 客户端不支持代理**：本地代理环境（Windows + 10808）WS 连不上，`feed="auto"` 8 秒无数据自动降级 REST 轮询（`okx_feed._watchdog`），此行为是特性不是 bug，VPS 直连时 WS 正常
+- **WS 与 REST 的 K 线返回结构不同**：ccxt.pro `watch_ohlcv` 返回增量（不能假设最后一根"进行中"），REST `fetch_ohlcv` 返回全窗口——收盘检测必须按**时间判断**（`ts ≤ 当前时间 − 周期时长`，见 `OkxFeed._bar_duration_ms`），禁止用"去掉最后一根"的写法（曾导致 VPS 一天不开仓）
 - REST 降级模式下盘口按需拉取：`OkxFeed.ensure_order_book()`，纸盘开平仓前必须经过它
 
 ## 5. 架构与依赖方向（禁止打乱）
@@ -69,6 +70,8 @@ store / api / static      持久化 / FastAPI / 看板
 
 - 改动必须跑 `uv run pytest`，全过才算完成；新增/修改 `okx_math`、`challenge`、`fills`、`strategy` 必须同步改单测
 - 关键不变量：强平价公式对照 OKX 官方口径（`test_margin_consistency_at_liquidation`）、容忍率线性无悬崖（`test_tolerance_linear_no_cliff`）、锁利/止损/超时/轮次重置、回测确定性（`test_backtest_deterministic`：相同输入 → 相同输出）
+- **纸盘验证必须覆盖 WS 与 REST 两种 feed**：曾因 WS 收盘检测 bug，VPS 一天不开仓而本地（REST）回测正常——本地 REST 跑通不算完成，还需在直连 OKX 的环境（VPS）确认 WS 路径正常（判断标准：日志周期性出现"新 K 线"，且该时段回测有信号时能实际开仓）
+- **回测能开仓而实盘/纸盘不开仓 → 第一排查数据管道（K 线是否到达引擎），不是策略**
 - 实盘路径不做自动化测试，靠启动预检 + 纸盘先跑通验证
 
 ## 8. 实盘安全红线
