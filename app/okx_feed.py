@@ -67,6 +67,7 @@ class OkxFeed:
         }
         self._tasks: list[asyncio.Task] = []
         self._rest_mode = False  # 当前是否运行在 REST 轮询模式
+        self._funding_logged: float | None = None  # 上次记日志的费率（防刷屏）
         self._last_ws_ts = 0.0   # 最近一次 WS 收到数据的时间
         self.feed_mode = cfg.feed or "auto"
 
@@ -301,13 +302,20 @@ class OkxFeed:
                 if rate is not None:
                     self.funding_rate = float(rate)
                     self.funding_time = float(fr.get("fundingTimestamp") or fr.get("timestamp") or 0)
-                    logger.info(f"资金费率更新: {self.funding_rate}")
+                    self._log_funding_change()
                     await self._emit("funding", {"rate": self.funding_rate, "ts": self.funding_time})
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.warning(f"funding 流断开: {e}")
                 await asyncio.sleep(2)
+
+    def _log_funding_change(self) -> None:
+        """费率变化 ±5% 才记 INFO（WS 每分钟推一次，全记会刷屏）。"""
+        r = self.funding_rate
+        if self._funding_logged is None or abs(r - self._funding_logged) > max(abs(self._funding_logged), 1e-8) * 0.05:
+            logger.info(f"资金费率更新: {r}")
+            self._funding_logged = r
 
     async def close(self) -> None:
         for t in self._tasks:
