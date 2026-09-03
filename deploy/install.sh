@@ -14,8 +14,12 @@ warn() { echo -e "\033[1;33m !!\033[0m $*"; }
 # ---------- 0. 前置 ----------
 if [ "$(id -u)" != "0" ]; then warn "建议用 root 执行（脚本按 /root/yuncs 部署）"; fi
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq curl git >/dev/null
+# 新 VPS 首启常见 unattended-upgrades 占 apt 锁：停掉并收尾，apt 等待上限 180s
+systemctl stop unattended-upgrades 2>/dev/null || true
+dpkg --configure -a 2>/dev/null || true
+apt_quiet() { apt-get -o DPkg::Lock::Timeout=180 "$@"; }
+apt_quiet update -qq
+apt_quiet install -y -qq curl git >/dev/null
 
 # ---------- 1. uv ----------
 if ! command -v uv >/dev/null 2>&1; then
@@ -87,12 +91,12 @@ read -rp "安装/更新 Caddy 看板（对外端口 $DASH_PORT + Basic Auth）�
 if [ "$yn" != "n" ] && [ "$yn" != "N" ]; then
     # 从 Caddy 官方源装最新版（Ubuntu 仓库的包太老，2.6 没有 basic_auth 指令）
     if ! caddy --version 2>/dev/null | grep -qE '^v?2\.(1[0-9]|[89])'; then
-        apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https >/dev/null
+        apt_quiet install -y -qq debian-keyring debian-archive-keyring apt-transport-https >/dev/null
         curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
         curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
-        apt-get update -qq
+        apt_quiet update -qq
     fi
-    apt-get install -y -qq caddy >/dev/null
+    apt_quiet install -y -qq caddy >/dev/null
     while true; do
         read -srp "设置看板密码: " PW1; echo
         read -srp "再输一次: " PW2; echo
