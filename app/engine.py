@@ -109,6 +109,12 @@ class Engine:
             self._warmed = True
             self._next_funding_ts = okx_math.next_funding_time(
                 datetime.now(timezone.utc)).timestamp()
+        # 实盘断电重启：交易所恢复的持仓立即重挂保护止损，避免保护空窗期
+        if self.broker.position.is_open:
+            self.strategy.arm_open_stop(self._bars, self.broker.position.side,
+                                        self.broker.position.entry)
+            logger.info(f"恢复持仓并重挂止损: {self.broker.position.side} "
+                        f"{self.broker.position.size_eth:.4f} ETH @ {self.broker.position.entry:.2f}")
         logger.info(f"第 {self.round_no} 轮开始 [{self.mode}] 初始 {initial:.4f}U "
                     f"出局线 {self.challenge.guard_level():.4f}U")
         await self._post_state(self.feed.price or self.last_mark or initial, force=True)

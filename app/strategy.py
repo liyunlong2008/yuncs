@@ -57,6 +57,10 @@ class Strategy:
                 return self.tp_px, "止盈"
         return None
 
+    def arm_open_stop(self, history: list[dict], side: str, entry: float) -> None:
+        """进程重启恢复持仓后重挂保护止损（子类按各自规则实现；基类默认不动作）。"""
+        pass
+
 
 def ema(values: list[float], period: int) -> list[float]:
     """EMA 序列（长度与输入一致，预热期为 None 由调用方保证足够长度）。"""
@@ -84,6 +88,14 @@ class TrendEma(Strategy):
     """EMA 快慢交叉顺势 + ATR 动态止损 + 固定盈亏比止盈。"""
 
     name = "trend_ema"
+
+    def arm_open_stop(self, history: list[dict], side: str, entry: float) -> None:
+        """重启恢复持仓：按 ATR 重挂硬止损（无止盈目标，等信号/移动逻辑接管）。"""
+        atr = calc_atr(history, self.atr_period)
+        if atr:
+            self.sl_px = entry - atr * self.atr_sl_mult if side == "long" \
+                else entry + atr * self.atr_sl_mult
+            self.tp_px = None
     def __init__(self, params: dict):
         super().__init__(params)
         self.ema_fast = int(params.get("ema_fast", 5))
@@ -188,3 +200,8 @@ class DonchianBreakout(Strategy):
             self.sl_px = max(self.sl_px, stop)
         else:
             self.sl_px = min(self.sl_px, stop)
+
+    def arm_open_stop(self, history: list[dict], side: str, entry: float) -> None:
+        """重启恢复持仓：用历史 K 线立即重挂移动通道止损。"""
+        self.sl_px = self._channel_stop(history, side)
+        self.tp_px = None
