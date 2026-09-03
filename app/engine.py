@@ -68,6 +68,7 @@ class Engine:
         self._latest_snapshot: dict = {}
         self._stop_requested = False
         self.last_mark = 0.0
+        self._persisted_trades = 0  # 已入库的成交数（本进程内增量落库）
 
     # ---------- 看板推送 ----------
     def latest_snapshot(self) -> dict:
@@ -98,6 +99,7 @@ class Engine:
             self.wallet = Wallet.new(initial)
             self.broker.wallet = self.wallet
         self.challenge.start_round(initial)
+        self._persisted_trades = len(self.broker.trades)  # 新周期只统计新成交
         self.run_id = await self.store.start_run(
             self.mode, self.strategy.name, initial, self.cfg.model_dump(exclude={"secrets"}),
         )
@@ -111,6 +113,15 @@ class Engine:
                     f"出局线 {self.challenge.guard_level():.4f}U")
         await self._post_state(self.feed.price or self.last_mark or initial, force=True)
 
+    async def _flush_trades(self) -> None:
+        """把 broker 里新增的成交增量写入数据库（面板"最近成交"的数据源）。"""
+        try:
+            while len(self.broker.trades) > self._persisted_trades:
+                await self.store.add_trade(self.run_id, self.broker.trades[self._persisted_trades])
+                self._persisted_trades += 1
+        except Exception as e:
+            logger.warning(f"成交入库失败: {e}")
+
     async def _end_round(self, status: Status) -> None:
         """本轮结算（平仓 + 记录），随后自动开新一轮；手动停止则结束。"""
         if status == Status.STOPPED:
@@ -119,6 +130,7 @@ class Engine:
                     await self.broker.close_position(reason="manual_stop")
                 except Exception as e:
                     logger.warning(f"停止平仓失败: {e}")
+            await self._flush_trades()
             mark = self.feed.price or self.last_mark
             equity = self.broker.equity(mark)
             await self.store.finish_run(self.run_id, status.value,
@@ -132,6 +144,7 @@ class Engine:
                 await self.broker.close_position(reason="round_end")
             except Exception as e:
                 logger.warning(f"轮次平仓失败: {e}")
+        await self._flush_trades()
         self.strategy.on_open()
         mark = self.feed.price or self.last_mark
         equity = self.broker.equity(mark)
@@ -229,6 +242,7 @@ class Engine:
             await self.broker.close_position(reason=sig.reason)
             self.strategy.on_open()
 
+        await self._flush_trades()
         if self.challenge.status != Status.RUNNING:
             return
         await self._post_state(bar["c"])

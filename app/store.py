@@ -40,6 +40,10 @@ class Store:
 
     async def start_run(self, mode: str, strategy: str, initial_balance: float,
                         config: dict) -> int:
+        # 上次进程未正常收尾（崩溃/强杀）的周期先标记为停止，避免积累脏"运行中"
+        await self.conn.execute(
+            "UPDATE runs SET status='stopped', result='进程重启未收尾', ended=? "
+            "WHERE status='running'", (time.time(),))
         cur = await self.conn.execute(
             "INSERT INTO runs(mode, strategy, initial_balance, config, status, started)"
             " VALUES(?,?,?,?,?,?)",
