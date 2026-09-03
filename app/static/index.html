@@ -6,44 +6,60 @@
 <title>YUNCS</title>
 <script src="echarts.min.js"></script>
 <style>
+  /* 仿 OKX 客户端：白底、灰标签+黑数值、涨绿跌红、细分隔线 */
   :root{
-    --bg:#f7f8fa; --card:#fff; --line:#e8ebf0;
-    --tx:#16181d; --dim:#6b7280; --faint:#9aa3af;
-    --green:#00b578; --red:#f6483d; --blue:#165dff;
+    --bg:#fff; --line:#eaecef; --tx:#1a1a1a; --label:#7c828a;
+    --green:#0ea97c; --red:#e5124b;
+    --badge:#f0f1f2; --badge-long:#e6f7f1; --badge-short:#feecef;
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--tx);font:15px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+  body{background:var(--bg);color:var(--tx);font:15px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",Inter,sans-serif}
   .n{font-variant-numeric:tabular-nums}
-  .top{position:sticky;top:0;background:var(--card);border-bottom:1px solid var(--line);padding:10px 14px;display:flex;align-items:center;gap:8px;z-index:9}
-  .top .name{font-weight:700}
-  .top .st{margin-left:auto;font-size:12px;color:var(--dim)}
-  .st .d{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:4px}
-  .price{font-size:26px;font-weight:700;padding:8px 14px 4px;background:var(--card);border-bottom:1px solid var(--line)}
-  .price .p{font-size:30px}
-  .g{color:var(--green)}.r{color:var(--red)}.dim{color:var(--dim)}.faint{color:var(--faint)}
-  main{max-width:520px;margin:0 auto;padding:10px 10px 60px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px}
-  .big{font-size:28px;font-weight:700}
-  .tag{display:inline-block;font-size:12px;font-weight:600;padding:1px 8px;border-radius:5px;vertical-align:3px;margin-left:6px}
-  .tag.up{color:var(--green);background:rgba(0,181,120,.1)}
-  .tag.down{color:var(--red);background:rgba(246,72,61,.1)}
-  .kv{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:12px;text-align:center}
-  .kv div{background:#fafbfc;border:1px solid #f0f2f5;border-radius:8px;padding:6px 2px}
-  .kv .k{display:block;font-size:11px;color:var(--faint)}
-  .kv .v{display:block;font-size:14px;font-weight:600;margin-top:1px}
-  .rows{margin-top:12px}
-  .rows div{display:flex;justify-content:space-between;padding:6px 0;font-size:14px;border-bottom:1px solid #f4f5f7}
-  .rows div:last-child{border-bottom:none}
-  .rows .k{color:var(--dim)}
-  #chart{height:220px;width:100%}
-  h3{font-size:13px;color:var(--dim);font-weight:500;margin-bottom:6px}
+  .g{color:var(--green)}.r{color:var(--red)}.lb{color:var(--label)}
+
+  .top{position:sticky;top:0;z-index:9;background:var(--bg);border-bottom:1px solid var(--line);
+       padding:12px 16px;display:flex;align-items:center;gap:8px}
+  .top .name{font-weight:700;font-size:16px}
+  .top .st{margin-left:auto;font-size:12px;color:var(--label)}
+  .top .d{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:4px}
+
+  .price{padding:12px 16px 10px;border-bottom:1px solid var(--line)}
+  .price .p{font-size:32px;font-weight:700;letter-spacing:-.3px}
+  .price .sub{color:var(--label);font-size:12px;margin-top:2px}
+
+  section{padding:16px;border-bottom:1px solid var(--line)}
+  h3{font-size:15px;font-weight:600;display:flex;align-items:center;gap:6px}
+
+  /* 徽章 */
+  .bd{display:inline-flex;align-items:center;border-radius:4px;padding:1px 7px;font-size:12px;font-weight:600}
+  .bd.gray{background:var(--badge);color:var(--tx)}
+  .bd.long{background:var(--badge-long);color:var(--green)}
+  .bd.short{background:var(--badge-short);color:var(--red)}
+
+  /* 收益行：右侧绿色大数字 */
+  .pnlrow{display:flex;align-items:center;gap:6px;margin-top:10px}
+  .pnlrow .big{font-size:22px;font-weight:700;margin-left:auto}
+
+  /* 三列网格：灰标签在上，黑数值在下 */
+  .g3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px 12px;margin-top:14px}
+  .g3 .k{font-size:12px;color:var(--label)}
+  .g3 .v{font-size:17px;font-weight:600;margin-top:4px}
+  .g3 .v.s{font-size:13px;color:var(--label);font-weight:400;margin-top:2px}
+
+  .big-eq{font-size:30px;font-weight:700;letter-spacing:-.3px}
+  .tag{display:inline-block;font-size:13px;font-weight:600;padding:2px 8px;border-radius:5px;margin-left:8px;vertical-align:4px}
+  .tag.up{color:var(--green);background:var(--badge-long)}
+  .tag.down{color:var(--red);background:var(--badge-short)}
+
+  #chart{height:220px;width:100%;margin-top:6px}
   table{width:100%;border-collapse:collapse;font-size:14px}
-  td{padding:7px 2px;text-align:right;border-bottom:1px solid #f4f5f7}
-  td:first-child{text-align:left;color:var(--faint);font-size:13px}
-  th{font-size:12px;color:var(--faint);font-weight:400;text-align:right;padding:4px 2px;border-bottom:1px solid var(--line)}
-  th:first-child{text-align:left}
+  th{font-size:12px;color:var(--label);font-weight:400;text-align:right;padding:6px 2px;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  td{padding:8px 2px;text-align:right;border-bottom:1px solid #f4f5f7}
+  tr:last-child td{border-bottom:none}
   .sd{font-weight:600}
   .sd.long{color:var(--green)}.sd.short{color:var(--red)}
+  .empty{color:var(--label);text-align:center;padding:30px 0}
 </style>
 </head>
 <body>
@@ -52,53 +68,63 @@
   <span class="name">YUNCS</span>
   <span class="st"><span class="d"></span><span id="st">纸盘 · 运行中</span>　<span id="round">第 1 轮</span></span>
 </div>
+
 <div class="price">
   <span class="p n" id="px">-</span>
-  <div class="dim" style="font-size:12px" id="pxinfo">-</div>
+  <div class="sub n" id="pxinfo">-</div>
 </div>
 
-<main>
-  <div class="card">
-    <span class="big n" id="equity">-</span><span class="tag" id="mult">-</span>
-    <div class="kv">
-      <div><span class="k">出局线</span><span class="v n r" id="guard">-</span></div>
-      <div><span class="k">峰值</span><span class="v n" id="peak">-</span></div>
-      <div><span class="k">回撤</span><span class="v n" id="dd">-</span></div>
-      <div><span class="k">安全空间</span><span class="v n" id="room">-</span></div>
-    </div>
-    <div class="rows">
-      <div><span class="k">可用余额</span><span class="n" id="bal">-</span></div>
-      <div><span class="k">已实现盈亏</span><span class="n" id="pnl">-</span></div>
-      <div><span class="k">手续费 / 资金费</span><span class="n" id="fees">-</span></div>
-    </div>
+<!-- 账户权益 -->
+<section>
+  <h3>账户权益 <span class="tag" id="mult" style="margin-left:8px">-</span></h3>
+  <div class="big-eq n" id="equity" style="margin-top:8px">-</div>
+  <div class="g3">
+    <div><div class="k">可用资金</div><div class="v n" id="bal">-</div></div>
+    <div><div class="k">占用保证金</div><div class="v n" id="mg">-</div></div>
+    <div><div class="k">已实现盈亏</div><div class="v n" id="pnl">-</div></div>
+    <div><div class="k">本轮峰值</div><div class="v n" id="peak">-</div></div>
+    <div><div class="k">出局线</div><div class="v n r" id="guard">-</div></div>
+    <div><div class="k">距出局线</div><div class="v n" id="room">-</div></div>
   </div>
+</section>
 
-  <div class="card">
-    <h3>当前持仓</h3>
-    <div style="font-size:20px;font-weight:700" id="posLine">空仓</div>
-    <div class="rows">
-      <div><span class="k">开仓均价</span><span class="n" id="pEp">-</span></div>
-      <div><span class="k">杠杆</span><span class="n" id="pLev">-</span></div>
-      <div><span class="k">强平价</span><span class="n r" id="pLq">-</span></div>
-      <div><span class="k">未实现盈亏</span><span class="n" id="pUp">-</span></div>
-    </div>
+<!-- 当前持仓 -->
+<section>
+  <h3>ETH 永续
+    <span class="bd gray" id="posSideBd">空仓</span>
+    <span class="bd gray" id="levBd">-x</span>
+  </h3>
+  <div class="pnlrow">
+    <span class="lb" style="font-size:13px">未实现盈亏</span>
+    <span class="big n g" id="posPnl">--</span>
   </div>
+  <div class="g3">
+    <div><div class="k">持仓量 (USDT)</div><div class="v n" id="pSz">-</div></div>
+    <div><div class="k">保证金</div><div class="v n" id="pMg">-</div></div>
+    <div><div class="k">收益率</div><div class="v n" id="pRoR">-</div></div>
+    <div><div class="k">开仓均价</div><div class="v n" id="pEp">-</div></div>
+    <div><div class="k">标记价格</div><div class="v n" id="pMk">-</div></div>
+    <div><div class="k">预估强平价</div><div class="v n r" id="pLq">-</div></div>
+  </div>
+</section>
 
-  <div class="card">
-    <h3>权益曲线</h3>
-    <div id="chart"></div>
-  </div>
+<!-- 权益曲线 -->
+<section>
+  <h3>权益曲线</h3>
+  <div id="chart"></div>
+</section>
 
-  <div class="card">
-    <h3>最近成交</h3>
-    <table><thead><tr><th>时间</th><th>方向</th><th>金额</th><th>开仓价</th><th>盈亏</th></tr></thead><tbody id="trades"></tbody></table>
-  </div>
+<!-- 最近成交 -->
+<section>
+  <h3>最近成交</h3>
+  <table style="margin-top:8px"><thead><tr><th>时间</th><th>方向</th><th>金额</th><th>开仓价</th><th>盈亏</th></tr></thead><tbody id="trades"></tbody></table>
+</section>
 
-  <div class="card">
-    <h3>轮次</h3>
-    <table><thead><tr><th>轮次</th><th>结果</th><th>状态</th></tr></thead><tbody id="runs"></tbody></table>
-  </div>
-</main>
+<!-- 轮次 -->
+<section style="border-bottom:none">
+  <h3>轮次</h3>
+  <table style="margin-top:8px"><thead><tr><th>轮次</th><th>结果</th><th>状态</th></tr></thead><tbody id="runs"></tbody></table>
+</section>
 
 <script>
 const $=i=>document.getElementById(i);
@@ -112,12 +138,12 @@ function initChart(){
   if(typeof echarts==='undefined')throw 0;
   ch=echarts.init($('chart'));
   ch.setOption({animation:false,grid:{left:10,right:10,top:12,bottom:22,containLabel:true},
-    xAxis:{type:'time',axisLabel:{color:'#9aa3af',hideOverlap:true,
+    xAxis:{type:'time',axisLabel:{color:'#7c828a',hideOverlap:true,
       formatter:v=>{const d=new Date(v),p=a=>String(a).padStart(2,'0');return p(d.getHours())+':'+p(d.getMinutes())}},
-      splitLine:{show:false},axisLine:{lineStyle:{color:'#e8ebf0'}}},
-    yAxis:{type:'value',scale:true,axisLabel:{color:'#9aa3af'},splitLine:{lineStyle:{color:'#f4f5f7'}}},
+      splitLine:{show:false},axisLine:{lineStyle:{color:'#eaecef'}}},
+    yAxis:{type:'value',scale:true,axisLabel:{color:'#7c828a'},splitLine:{lineStyle:{color:'#f4f5f7'}}},
     tooltip:{trigger:'axis',valueFormatter:v=>v==null?'-':v.toFixed(2)},
-    series:[{type:'line',showSymbol:false,smooth:true,lineStyle:{width:2,color:'#00b578'},areaStyle:{color:'rgba(0,181,120,.08)'},data:[]}]});
+    series:[{type:'line',showSymbol:false,smooth:true,lineStyle:{width:2,color:'#0ea97c'},areaStyle:{color:'rgba(14,169,124,.08)'},data:[]}]});
 }
 function push(ts,eq){
   if(ts===lastTs||!ch)return;lastTs=ts;
@@ -127,53 +153,65 @@ function push(ts,eq){
 function render(s){
   if(!s)return;
   const c=s.challenge||{};
+  const p=s.position||{};
   $('px').textContent=n(s.price,2);
   $('px').className='p n '+(s.price>lastPx?'g':s.price<lastPx?'r':'');
   lastPx=s.price;
-  $('pxinfo').textContent='买 '+n(s.bid)+' · 卖 '+n(s.ask)+' · 资金费率 '+((s.funding_rate||0)*100).toFixed(4)+'%';
-  const st={running:'运行中',guard:'本轮结束',timeout:'超时',stopped:'已停止'}[c.status]||'';
-  $('st').innerHTML='<span class="d"></span>'+(s.mode==='live'?'实盘':'纸盘')+' · '+st;
+  $('pxinfo').textContent='买 '+n(s.bid)+'　卖 '+n(s.ask)+'　资金费率 '+((s.funding_rate||0)*100).toFixed(4)+'%';
+  const stTxt={running:'运行中',guard:'本轮结束',timeout:'超时',stopped:'已停止'}[c.status]||'';
+  $('st').innerHTML='<span class="d"></span>'+(s.mode==='live'?'实盘':'纸盘')+' · '+stTxt;
   $('round').textContent='第 '+(c.round||'-')+' 轮';
+
+  // 账户权益
+  const w=s.wallet;
   $('equity').textContent=n(c.equity,2);
   const r0=c.initial_balance||1,pct=(c.equity-r0)/r0*100;
-  $('mult').textContent=(pct>=0?'+':'')+pct.toFixed(1)+'%';
+  $('mult').textContent=(pct>=0?'+':'')+pct.toFixed(2)+'%';
   $('mult').className='tag '+(pct>=0?'up':'down');
-  $('guard').textContent=n(c.guard_level,2);
-  $('peak').textContent=n(c.peak_equity,2);
-  $('dd').textContent=n(c.drawdown_pct,1)+'%';
-  $('dd').className='v n '+((c.drawdown_pct||0)>(c.tolerance_pct||30)*0.7?'r':'');
-  $('room').textContent=n((c.equity||0)-(c.guard_level||0),2);
-  const p=s.position||{},w=s.wallet;
   if(w){
-    $('bal').textContent=n(w.balance,2)+' USDT';
-    $('pnl').textContent=s2(w.realized_pnl,2)+' USDT';
-    $('pnl').className='n '+cl(w.realized_pnl||0);
-    $('fees').textContent=n(w.fees_paid,3)+' / '+n(w.funding_paid,3)+' USDT';
+    $('bal').textContent=n(w.balance,2);
+    $('pnl').textContent=s2(w.realized_pnl,2);
+    $('pnl').className='v n '+cl(w.realized_pnl||0);
+    $('mg').textContent=n(w.margin_locked,2);
   }
+  $('peak').textContent=n(c.peak_equity,2);
+  $('guard').textContent=n(c.guard_level,2);
+  $('room').textContent=n((c.equity||0)-(c.guard_level||0),2)+' USDT';
+
+  // 持仓
   const open=p&&p.side&&p.size_eth;
-  const line=$('posLine');
+  const bd=$('posSideBd');
   if(open){
-    const t=p.side==='long'?'做多':'做空';
-    line.textContent=t+' '+n(p.notional_usdt,1)+' USDT';
-    line.style.color=p.side==='long'?'var(--green)':'var(--red)';
-  }else{line.textContent='空仓';line.style.color='var(--faint)';}
-  $('pEp').textContent=open?n(p.entry,2):'-';
-  $('pLev').textContent=(s.leverage||'-')+' x';
-  $('pLq').textContent=open?n(p.liq_px,2):'-';
-  const upl=open?(p.unrealized_pnl||0):0, mg=open?(p.margin_usdt||0):0;
-  $('pUp').textContent=open?(s2(upl,2)+' USDT'+(mg>0?'  ('+((upl/mg*100)>=0?'+':'')+(upl/mg*100).toFixed(1)+'%)':'')):'-';
-  $('pUp').className='n '+(open?(upl>0?'g':upl<0?'r':''):'');
+    bd.textContent=p.side==='long'?'做多':'做空';
+    bd.className='bd '+(p.side==='long'?'long':'short');
+  }else{bd.textContent='空仓';bd.className='bd gray';}
+  $('levBd').textContent=(s.leverage||'-')+'x';
+  const upl=open?(p.unrealized_pnl||0):null;
+  const pn=$('posPnl');
+  if(upl!=null){
+    pn.textContent=s2(upl,2);
+    pn.className='big n '+(upl>0?'g':upl<0?'r':'');
+  }else{pn.textContent='--';pn.className='big n lb';}
+  $('pSz').textContent=open?n(p.notional_usdt,1):'--';
+  $('pMg').textContent=open?n(p.margin_usdt,2):'--';
+  const mg=open?(p.margin_usdt||0):0;
+  $('pRoR').textContent=(upl!=null&&mg>0)?((upl/mg*100>=0?'+':'')+(upl/mg*100).toFixed(2)+'%'):(open?'--':'--');
+  $('pRoR').className='v n '+((upl||0)>0?'g':(upl||0)<0?'r':'');
+  $('pEp').textContent=open?n(p.entry,2):'--';
+  $('pMk').textContent=n(p.mark||s.price,2);
+  $('pLq').textContent=open?n(p.liq_px,2):'--';
+
   if(c.equity!=null)push(s.ts,c.equity);
 }
 async function loadTrades(){
   try{
     const r=await(await fetch('/api/trades?limit=10')).json();
     $('trades').innerHTML=r.map(t=>`<tr>
-      <td>${tm(t.ts)}</td>
+      <td class="lb">${tm(t.ts)}</td>
       <td><span class="sd ${t.side||''}">${t.side==='long'?'开多':t.side==='short'?'开空':'平仓'}</span></td>
       <td class="n">${n(t.size_eth*t.entry,1)}</td>
       <td class="n">${n(t.entry,1)}</td>
-      <td class="n ${cl(t.pnl)}">${s2(t.pnl,2)}</td></tr>`).join('')||'<tr><td class="faint">暂无成交</td></tr>';
+      <td class="n ${cl(t.pnl)}">${s2(t.pnl,2)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">暂无成交</td></tr>';
   }catch(e){}
 }
 async function loadRuns(){
@@ -183,7 +221,7 @@ async function loadRuns(){
       const d=(x.final_equity||0)-(x.initial_balance||0);
       const pc=x.initial_balance?(d/x.initial_balance*100):0;
       return `<tr>
-      <td>${x.id}</td>
+      <td class="lb">${x.id}</td>
       <td class="n ${cl(d)}">${x.final_equity!=null?s2(d,2)+' ('+(pc>=0?'+':'')+pc.toFixed(1)+'%)':'-'}</td>
       <td>${({running:'运行中',guard:'结束',timeout:'超时',stopped:'停止',end_of_data:'数据完'}[x.status]||x.status)}</td></tr>`;
     }).join('');
@@ -202,7 +240,7 @@ function ws(){
     initChart();
     const h=await(await fetch('/api/equity?limit=3000')).json();
     if(Array.isArray(h)&&h.length)ch.setOption({series:[{data:h.map(p=>[p.ts*1000,p.equity])}]});
-  }catch(e){$('chart').innerHTML='<div style="color:#9aa3af;text-align:center;padding-top:80px">图表暂不可用</div>'}
+  }catch(e){$('chart').innerHTML='<div class="empty">图表暂不可用</div>'}
   render(s0);loadTrades();loadRuns();ws();
   setInterval(loadTrades,20000);setInterval(loadRuns,20000);
   window.addEventListener('resize',()=>ch&&ch.resize());
