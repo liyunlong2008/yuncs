@@ -85,6 +85,20 @@ deploy/           VPS 部署（systemd + caddy）
 
 见 `deploy/README.md`：`uv sync --frozen` + systemd 常驻 + caddy 反代看板（Basic Auth，对外端口 8765）。
 
+## 策略研究小结（2026-09，真实 OKX 数据）
+
+系统性筛过 8+ 策略族（趋势突破/EMA 趋势/动量/布林/RSI 回归/随机RSI/SuperTrend/震荡趋势双模混合），
+验证协议 = 15m 实盘连续语义 + 5x 杠杆 + 训练/样本外多窗口拆分。收敛结论：
+
+- **唯一跨全部独立窗口为正：`rsi_revert`（RSI(2)+SMA200 趋势过滤，lo10/5x/15m）**
+  （三窗口 1.11/1.03/1.66x + 此前 3 年逐年 2.29/2.24/1.15x 全正；胜率仅 6~9%，靠少数大反弹盈利）
+- boll_revert 次之（2/3 窗口正）；ts_momentum 仅在趋势期窗口正；donchian/EMA/混合全负
+- **5m 周期对此类策略噪声过大，一律用 15m**
+- **20x 杠杆是均值回归的死亡区（盈亏比倒挂），5x 才成立；10x 亦是悬崖**
+
+**当前状态**：rsi_revert 待 VPS 纸盘前向验证（1~2 周），通过前不投入实盘。
+配置示例：`timeframe="15m"`、`strategy.name="rsi_revert"`、`params{lo=10,sma_len=200,exit_rsi=false}`、`leverage=5`。
+
 ## 风险提示（务必阅读）
 
 **当前内置策略（donchian）在真实资金语义下期望为负，本仓库定位是玩法/风控引擎与实验台，不是可盈利策略。**
