@@ -21,6 +21,8 @@ def create_strategy(name: str, params: dict) -> "Strategy":
         TrendEma.name: TrendEma,
         DonchianBreakout.name: DonchianBreakout,
         RsiRevert.name: RsiRevert,
+        BollRevert.name: BollRevert,
+        EmaCrossTrail.name: EmaCrossTrail,
     }
     cls = registry.get(name or TrendEma.name, TrendEma)
     return cls(params or {})
@@ -342,4 +344,118 @@ class RsiRevert(Strategy):
         atr = calc_atr(history, self.atr_period) or entry * 0.005
         self.sl_px = entry - atr * self.atr_sl_mult if side == "long" \
             else entry + atr * self.atr_sl_mult
+        self.tp_px = None
+
+
+def calc_sma(closes: list[float], n: int) -> Optional[float]:
+    if len(closes) < n:
+        return None
+    return sum(closes[-n:]) / n
+
+
+class BollRevert(Strategy):
+    """布林带均值回归：触下轨且价格在长均线上方做多，回中轨离场（做空镜像）。"""
+
+    name = "boll_revert"
+
+    def __init__(self, params: dict):
+        super().__init__(params)
+        self.bb_len = int(params.get("bb_len", 20))
+        self.bb_mult = float(params.get("bb_mult", 2.0))
+        self.sma_len = int(params.get("sma_len", 200))
+        self.atr_period = int(params.get("atr_period", 14))
+        self.atr_sl_mult = float(params.get("atr_sl_mult", 2.0))
+
+    def _bands(self, closes):
+        if len(closes) < self.bb_len:
+            return None, None, None
+        w = closes[-self.bb_len:]
+        mid = sum(w) / self.bb_len
+        sd = (sum((x - mid) ** 2 for x in w) / self.bb_len) ** 0.5
+        return mid, mid - self.bb_mult * sd, mid + self.bb_mult * sd
+
+    def on_bar(self, bar: dict, ctx) -> Signal:
+        tail = ctx.history[-(self.sma_len + self.bb_len + 60):]
+        closes = [b["c"] for b in tail]
+        if len(closes) < self.sma_len + 5:
+            return Signal("none", "预热中")
+        mid, lo, hi = self._bands(closes)
+        sma = calc_sma(closes, self.sma_len)
+        if None in (mid, lo, hi, sma):
+            return Signal("none")
+        c = bar["c"]
+        pos = ctx.position
+        if pos.is_open:
+            if pos.side == "long" and c >= mid:
+                return Signal("close", "回到中轨")
+            if pos.side == "short" and c <= mid:
+                return Signal("close", "回到中轨")
+            return Signal("none")
+        if c < lo and c > sma:
+            atr = calc_atr(ctx.history, self.atr_period) or c * 0.005
+            self.sl_px = c - atr * self.atr_sl_mult
+            self.tp_px = None
+            return Signal("open_long", "触下轨")
+        if c > hi and c < sma:
+            atr = calc_atr(ctx.history, self.atr_period) or c * 0.005
+            self.sl_px = c + atr * self.atr_sl_mult
+            self.tp_px = None
+            return Signal("open_short", "触上轨")
+        return Signal("none")
+
+    def arm_open_stop(self, history: list[dict], side: str, entry: float) -> None:
+        atr = calc_atr(history, self.atr_period) or entry * 0.005
+        self.sl_px = entry - atr * self.atr_sl_mult if side == "long" \
+            else entry + atr * self.atr_sl_mult
+        self.tp_px = None
+
+
+class EmaCrossTrail(Strategy):
+    """均线交叉入场 + 移动通道/ATR 止损离场（趋势跟随，让利润奔跑）。"""
+
+    name = "ema_cross_trail"
+
+    def __init__(self, params: dict):
+        super().__init__(params)
+        self.fast = int(params.get("fast", 12))
+        self.slow = int(params.get("slow", 26))
+        self.atr_period = int(params.get("atr_period", 14))
+        self.trail_mult = float(params.get("trail_mult", 3.0))
+
+    def on_bar(self, bar: dict, ctx) -> Signal:
+        tail = ctx.history[-(self.slow * 3 + 60):]
+        closes = [b["c"] for b in tail]
+        if len(closes) < self.slow + 3:
+            return Signal("none", "预热中")
+        ef, es = ema(closes, self.fast), ema(closes, self.slow)
+        pos = ctx.position
+        c = bar["c"]
+        if pos.is_open:
+            # 移动止损只朝有利方向
+            atr = calc_atr(ctx.history, self.atr_period) or c * 0.005
+            if pos.side == "long":
+                self.sl_px = max(self.sl_px or 0, c - atr * self.trail_mult)
+            else:
+                self.sl_px = min(self.sl_px or 1e18, c + atr * self.trail_mult)
+            if pos.side == "long" and ef[-1] < es[-1]:
+                return Signal("close", "死叉")
+            if pos.side == "short" and ef[-1] > es[-1]:
+                return Signal("close", "金叉")
+            return Signal("none")
+        if ef[-1] > es[-1] and ef[-2] <= es[-2]:
+            atr = calc_atr(ctx.history, self.atr_period) or c * 0.005
+            self.sl_px = c - atr * self.trail_mult
+            self.tp_px = None
+            return Signal("open_long", "金叉")
+        if ef[-1] < es[-1] and ef[-2] >= es[-2]:
+            atr = calc_atr(ctx.history, self.atr_period) or c * 0.005
+            self.sl_px = c + atr * self.trail_mult
+            self.tp_px = None
+            return Signal("open_short", "死叉")
+        return Signal("none")
+
+    def arm_open_stop(self, history: list[dict], side: str, entry: float) -> None:
+        atr = calc_atr(history, self.atr_period) or entry * 0.005
+        self.sl_px = entry - atr * self.trail_mult if side == "long" \
+            else entry + atr * self.trail_mult
         self.tp_px = None
