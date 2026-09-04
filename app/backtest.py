@@ -22,11 +22,14 @@ from .wallet import Wallet
 
 class Backtest:
     def __init__(self, cfg: Config, bars: list[dict], funding: list[dict],
-                 spec: InstrumentSpec | None = None):
+                 spec: InstrumentSpec | None = None, compounding: bool = False):
         self.cfg = cfg
         self.bars = bars
         self.funding = funding
         self.spec = spec or InstrumentSpec()  # 默认值即 OKX ETH-USDT-SWAP 当前规格
+        # compounding=True = 实盘语义：周期结束不重置钱包，下一周期从当前余额起算（连续复利）
+        self.compounding = compounding
+        self._initial0 = cfg.challenge.initial_balance
         self.strategy = create_strategy(cfg.strategy.name, cfg.strategy.params)
         initial = cfg.challenge.initial_balance
         if initial <= 0:
@@ -111,11 +114,12 @@ class Backtest:
     # ---------- 轮次 ----------
     def _record_round(self, status: Status, bar: dict, finished: bool = True) -> None:
         equity = self.wallet.equity(self.position.unrealized(bar["c"]))
-        end_multiple = equity / self.cfg.challenge.initial_balance
+        r_initial = self.challenge.initial_balance or self._initial0
+        end_multiple = equity / r_initial if r_initial > 0 else 0.0
         self.rounds.append({
             "round": self._round_no + 1,
             "status": status.value if finished else "end_of_data",
-            "initial": self.cfg.challenge.initial_balance,
+            "initial": r_initial,
             "final": round(equity, 4),
             "multiple": round(end_multiple, 4),
             "peak": round(self.challenge.peak_equity, 4),
@@ -125,10 +129,16 @@ class Backtest:
 
     def _reset_round(self, bar: dict) -> None:
         self._round_no += 1
-        initial = self.cfg.challenge.initial_balance
         self.strategy.on_open()
         self.position = Position()
-        self.wallet = Wallet.new(initial)
+        if self.compounding:
+            # 实盘语义：不重置钱包，下一周期从当前余额起算（连续复利）
+            initial = self.wallet.equity(0.0)
+            if initial <= 0:
+                initial = self._initial0
+        else:
+            initial = self._initial0
+            self.wallet = Wallet.new(initial)
         self.challenge.start_round(initial)
         self.challenge.start_ts = bar["ts"] / 1000.0
 
@@ -218,6 +228,9 @@ class Backtest:
         losses = [p for p in pnls if p <= 0]
         liq_count = sum(1 for t in self.trades if t["reason"] == "liquidation")
         max_dd = max((s["drawdown_pct"] for s in self.equity_curve), default=0.0)
+        # 期末权益与复合倍数（实盘连续语义的核心指标）
+        end_equity = self.wallet.equity(self.position.unrealized(self.bars[-1]["c"]))
+        compounded = end_equity / self._initial0 if self._initial0 > 0 else 0.0
         return {
             "rounds_total": len(self.rounds),
             "rounds_completed": len(completed),
@@ -228,7 +241,9 @@ class Backtest:
             "avg_end_multiple": round(sum(mults) / len(mults), 3) if mults else 0.0,
             "best_round_multiple": round(max(mults), 3) if mults else 0.0,
             "last_round_status": self.rounds[-1]["status"] if self.rounds else "-",
-            "initial_balance": self.cfg.challenge.initial_balance,
+            "initial_balance": self._initial0,
+            "end_equity": round(end_equity, 4),
+            "compounded_multiple": round(compounded, 3),
             "trades": len(self.trades),
             "wins": len(wins),
             "losses": len(losses),
