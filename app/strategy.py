@@ -24,6 +24,7 @@ def create_strategy(name: str, params: dict) -> "Strategy":
         BollRevert.name: BollRevert,
         EmaCrossTrail.name: EmaCrossTrail,
         TsMom.name: TsMom,
+        HybridRangeTrend.name: HybridRangeTrend,
     }
     cls = registry.get(name or TrendEma.name, TrendEma)
     return cls(params or {})
@@ -607,3 +608,90 @@ class StochRsiRevert(Strategy):
             self.tp_px = None
             return Signal("open_short", f"StochK={k:.0f}")
         return Signal("none")
+
+
+class HybridRangeTrend(Strategy):
+    """震荡/趋势双模式：通道内做均值回归，通道突破后切换趋势骑行。
+
+    - 通道外收盘突破前 entry_len 根高低(且顺 sma_len 大趋势) -> TREND 模式：
+      持单用 chandelier 止损(3×ATR 逐bar上移)，收盘破短均线(exit_ma)或止损离场
+    - 通道内且 RSI(2) 超卖/超买 -> RANGE 模式：回归到短均线即离场
+    单仓，先判突破后判回归；记录入场模式决定离场规则。
+    """
+
+    name = "hybrid_range_trend"
+
+    def __init__(self, params: dict):
+        super().__init__(params)
+        self.entry_len = int(params.get("entry_len", 40))
+        self.rsi_len = int(params.get("rsi_len", 2))
+        self.lo = float(params.get("lo", 10.0))
+        self.hi = float(params.get("hi", 90.0))
+        self.sma_len = int(params.get("sma_len", 200))
+        self.exit_ma = int(params.get("exit_ma", 20))
+        self.atr_period = int(params.get("atr_period", 14))
+        self.sl_mult = float(params.get("sl_mult", 3.0))
+        self._mode = -1  # 0=range 1=trend
+
+    def on_bar(self, bar: dict, ctx) -> Signal:
+        tail = ctx.history[-(self.sma_len + self.entry_len + 60):]
+        closes = [b["c"] for b in tail]
+        if len(closes) < self.sma_len + 5:
+            return Signal("none", "预热中")
+        n = len(closes)
+        prev = tail[:-1]
+        hi40 = max(b["h"] for b in prev[-self.entry_len:])
+        lo40 = min(b["l"] for b in prev[-self.entry_len:])
+        sma = calc_sma(closes, self.sma_len)
+        rsi = calc_rsi(closes, self.rsi_len)
+        if None in (sma, rsi):
+            return Signal("none")
+        c = bar["c"]
+        atr = calc_atr(ctx.history, self.atr_period) or c * 0.005
+        ema_exit = calc_sma(closes, self.exit_ma)
+        pos = ctx.position
+        if pos.is_open:
+            # 模式内离场
+            if self._mode == 1:  # trend: 破短均线离场
+                if (pos.side == "long" and c < ema_exit) or (pos.side == "short" and c > ema_exit):
+                    return Signal("close", "趋势破坏")
+                stop = c - self.sl_mult * atr if pos.side == "long" else c + self.sl_mult * atr
+                self.sl_px = stop
+                return Signal("none")
+            # range: 回归到短均线(5)或 RSI 回中
+            ema5 = calc_sma(closes, 5)
+            if pos.side == "long" and (c >= (ema5 or c) or rsi > 50):
+                return Signal("close", "回归到位")
+            if pos.side == "short" and (c <= (ema5 or c) or rsi < 50):
+                return Signal("close", "回归到位")
+            return Signal("none")
+        # 空仓：先突破(趋势)后回归
+        prev_c = closes[-2]
+        broke_hi = c > hi40 and prev_c <= hi40 and c > sma
+        broke_lo = c < lo40 and prev_c >= lo40 and c < sma
+        if broke_hi:
+            self._mode = 1
+            self.sl_px = c - self.sl_mult * atr
+            self.tp_px = None
+            return Signal("open_long", "通道突破")
+        if broke_lo:
+            self._mode = 1
+            self.sl_px = c + self.sl_mult * atr
+            self.tp_px = None
+            return Signal("open_short", "通道跌破")
+        if c < lo40 and c > sma and rsi < self.lo:
+            self._mode = 0
+            self.sl_px = c - 2.0 * atr
+            self.tp_px = None
+            return Signal("open_long", f"通道内超卖 RSI={rsi:.0f}")
+        if c > hi40 and c < sma and rsi > self.hi:
+            self._mode = 0
+            self.sl_px = c + 2.0 * atr
+            self.tp_px = None
+            return Signal("open_short", f"通道内超买 RSI={rsi:.0f}")
+        return Signal("none")
+
+    def arm_open_stop(self, history: list[dict], side: str, entry: float) -> None:
+        atr = calc_atr(history, self.atr_period) or entry * 0.005
+        self.sl_px = entry - self.sl_mult * atr if side == "long" else entry + self.sl_mult * atr
+        self.tp_px = None
