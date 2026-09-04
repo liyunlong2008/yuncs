@@ -88,6 +88,32 @@ def calc_atr(bars: list[dict], period: int) -> Optional[float]:
     return sum(trs) / len(trs)
 
 
+def calc_adx(bars: list[dict], period: int = 14) -> Optional[float]:
+    """ADX（趋势强度 0~100）：>20 一般视为有趋势。返回最近 period 的平均 DX。"""
+    n = len(bars)
+    if n < period * 2 + 1:
+        return None
+    trs, pdm, ndm = [], [], []
+    for i in range(1, n):
+        h, l, pc = bars[i]["h"], bars[i]["l"], bars[i - 1]["c"]
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+        up, dn = h - bars[i - 1]["h"], bars[i - 1]["l"] - l
+        pdm.append(up if up > dn and up > 0 else 0.0)
+        ndm.append(dn if dn > up and dn > 0 else 0.0)
+
+    def wilder(vals: list[float]) -> list[float]:
+        out = [sum(vals[:period])]
+        for v in vals[period:]:
+            out.append(out[-1] - out[-1] / period + v)
+        return out
+
+    trs_w, pdm_w, ndm_w = wilder(trs), wilder(pdm), wilder(ndm)
+    pdi = [100.0 * a / b if b > 0 else 0.0 for a, b in zip(pdm_w, trs_w)]
+    ndi = [100.0 * a / b if b > 0 else 0.0 for a, b in zip(ndm_w, trs_w)]
+    dx = [100.0 * abs(a - b) / (a + b) if a + b > 0 else 0.0 for a, b in zip(pdi, ndi)]
+    return sum(dx[-period:]) / period
+
+
 class TrendEma(Strategy):
     """EMA 快慢交叉顺势 + ATR 动态止损 + 固定盈亏比止盈。"""
 
@@ -165,6 +191,9 @@ class DonchianBreakout(Strategy):
         self.exit_len = int(params.get("exit_len", 15))
         self.atr_period = int(params.get("atr_period", 14))
         self.atr_stop_mult = float(params.get("atr_stop_mult", 0.0))
+        # 趋势强度过滤：adx_min>0 时只在 ADX>=adx_min 允许开仓（砍震荡期假突破）
+        self.adx_min = float(params.get("adx_min", 0.0))
+        self.adx_period = int(params.get("adx_period", 14))
 
     def on_bar(self, bar: dict, ctx) -> Signal:
         hist = ctx.history
@@ -178,6 +207,12 @@ class DonchianBreakout(Strategy):
         prev_lows = [b["l"] for b in hist[-(self.entry_len + 1):-1]]
         channel_high = max(prev_highs)
         channel_low = min(prev_lows)
+        if self.adx_min > 0:
+            # ADX 只取最近一小段历史计算（避免对全量历史 O(n²)）
+            tail = hist[-(self.adx_period * 8):]
+            adx = calc_adx(tail, self.adx_period)
+            if adx is None or adx < self.adx_min:
+                return Signal("none", f"ADX 过滤 {adx if adx is not None else '-'}")
         if bar["c"] > channel_high:
             self.sl_px = self._channel_stop(hist, "long")
             self.tp_px = None

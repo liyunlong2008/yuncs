@@ -1,7 +1,7 @@
 """策略单测：海龟式通道突破（入场突破/移动通道止损/对称做空）。"""
 import pytest
 
-from app.strategy import DonchianBreakout, create_strategy
+from app.strategy import DonchianBreakout, calc_adx, create_strategy
 
 
 class _Pos:
@@ -86,3 +86,25 @@ def test_check_tp_sl_hits_trailing_stop():
     hit = s.check_tp_sl(hit_bar, "long")
     assert hit is not None
     assert hit[0] == pytest.approx(stop)
+
+
+def test_adx_low_on_flat_low_on_spike_high_on_trend():
+    flat = bars([3000.0] * 40)
+    assert calc_adx(flat, 14) is not None
+    assert calc_adx(flat, 14) < 15  # 无趋势 ADX 低
+    trend = bars([3000.0 + i * 2 for i in range(60)])  # 强单边
+    assert calc_adx(trend, 14) > 40  # 强趋势 ADX 高
+
+
+def test_adx_gate_blocks_chop_breakout():
+    s = DonchianBreakout({"entry_len": 10, "exit_len": 5, "adx_min": 25})
+    hist = bars([3000.0] * 30 + [3005.0])  # 平盘后单根突破，ADX 仍低
+    sig = s.on_bar(hist[-1], _Ctx(hist, _Pos()))
+    assert sig.action == "none"  # 被 ADX 过滤拦截
+
+
+def test_adx_gate_allows_trend_breakout():
+    s = DonchianBreakout({"entry_len": 10, "exit_len": 5, "adx_min": 25})
+    hist = bars([3000.0] * 20 + [3000.0 + i * 5 for i in range(1, 30)])  # 持续上升趋势
+    sig = s.on_bar(hist[-1], _Ctx(hist, _Pos()))
+    assert sig.action == "open_long"
