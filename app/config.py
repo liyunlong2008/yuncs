@@ -18,7 +18,7 @@ class ChallengeConfig(BaseModel):
     tight_drawdown_pct: float = 10  # 达到 tight_start_multiple 后收紧到该值（深盈利保护）
     tight_start_multiple: float = 1.5  # 从 1x 到该倍数容忍率线性收紧（约 1.25x 起出局线高于本金）
     duration_hours: float = 0      # 可选单轮时长上限；0 = 不限时
-    timeframe: str = "5m"          # 策略 K 线周期（donchian 建议 5m，1m 换手过高费率拖累）
+    timeframe: str = "15m"         # 策略 K 线周期（研究结论：均值回归类用 15m，5m 噪声过大）
 
 
 class ExchangeConfig(BaseModel):
@@ -32,7 +32,7 @@ class ExchangeConfig(BaseModel):
 
 
 class RiskConfig(BaseModel):
-    leverage: int = 20       # 开仓杠杆（donchian+20u 推荐 20~50x；100x 下通道止损比强平价远，会先被强平）
+    leverage: int = 5        # 开仓杠杆（均值回归 5x 成立、10x+ 悬崖；趋势类另论）
     margin_per_trade: float = 5
     margin_frac: float = 0   # 0=固定 margin_per_trade；>0=保证金随余额按比例缩放（实盘防跌破固定保证金停摆）
     max_notional: float = 1000
@@ -41,7 +41,7 @@ class RiskConfig(BaseModel):
 
 
 class StrategyConfig(BaseModel):
-    name: str = "donchian"  # 海龟式通道突破；trend_ema 保留可选
+    name: str = "rsi_revert"  # 研究结论：RSI(2)均值回归+SMA200 趋势过滤（跨窗口唯一全正）
     params: dict = Field(default_factory=dict)
 
 

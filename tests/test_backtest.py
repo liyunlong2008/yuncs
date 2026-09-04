@@ -96,10 +96,13 @@ def test_backtest_liquidation_on_crash():
 def test_backtest_funding_deducted():
     """持仓跨过资金费结算点 -> 按 OKX 公式扣费（缓慢上行，通道止损不触发）。"""
     # 平盘 80 根 -> 跳涨 5U 触发突破开多 -> 缓步上行 200 根（止损线低于价格）
+    # 用 donchian 制造确定持仓（默认策略 rsi_revert 在此序列可能不开仓）
     prices = flat_series(80, 3000.0) + [3005.0] + [3005.0 + 0.2 * i for i in range(200)]
     bars = synth_bars(prices)
     funding = [{"ts": bars[0]["ts"] + 150 * 60_000, "rate": 0.0002}]
-    bt = Backtest(make_cfg(challenge={"initial_balance": 20.0}), bars, funding)
+    cfg = make_cfg(challenge={"initial_balance": 20.0},
+                   strategy={"name": "donchian", "params": {"entry_len": 30, "exit_len": 15}})
+    bt = Backtest(cfg, bars, funding)
     bt.run()
     assert bt.wallet.funding_paid > 0
     # 默认杠杆 20x: 名义=min(5×20,1000)=100U -> 仓位约 0.033 ETH
@@ -113,10 +116,12 @@ def test_backtest_requires_positive_initial():
 
 
 def test_backtest_keeps_same_strategy_code():
-    """回测与实盘用同一策略类（默认 donchian，可通过配置切换）。"""
-    from app.strategy import DonchianBreakout, TrendEma
+    """回测与实盘用同一策略类（默认 rsi_revert，可通过配置切换）。"""
+    from app.strategy import DonchianBreakout, RsiRevert, TrendEma
     cfg = make_cfg(challenge={"initial_balance": 20.0})
     bt = Backtest(cfg, synth_bars(flat_series(80, 3000.0) + uptrend(100, 3000.0)), [])
-    assert isinstance(bt.strategy, DonchianBreakout)
+    assert isinstance(bt.strategy, RsiRevert)
     cfg2 = make_cfg(challenge={"initial_balance": 20.0}, strategy={"name": "trend_ema"})
     assert isinstance(Backtest(cfg2, synth_bars([3000.0] * 100), []).strategy, TrendEma)
+    cfg3 = make_cfg(challenge={"initial_balance": 20.0}, strategy={"name": "donchian"})
+    assert isinstance(Backtest(cfg3, synth_bars([3000.0] * 100), []).strategy, DonchianBreakout)
