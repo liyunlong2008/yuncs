@@ -23,6 +23,7 @@ def create_strategy(name: str, params: dict) -> "Strategy":
         RsiRevert.name: RsiRevert,
         BollRevert.name: BollRevert,
         EmaCrossTrail.name: EmaCrossTrail,
+        TsMom.name: TsMom,
     }
     cls = registry.get(name or TrendEma.name, TrendEma)
     return cls(params or {})
@@ -459,3 +460,150 @@ class EmaCrossTrail(Strategy):
         self.sl_px = entry - atr * self.trail_mult if side == "long" \
             else entry + atr * self.trail_mult
         self.tp_px = None
+
+
+class SuperTrend(Strategy):
+    """SuperTrend：ATR 上下轨跟随，方向翻转即换仓（经典趋势/跟踪止损）。"""
+
+    name = "supertrend"
+
+    def __init__(self, params: dict):
+        super().__init__(params)
+        self.period = int(params.get("period", 10))
+        self.mult = float(params.get("mult", 3.0))
+        self.atr_period = int(params.get("atr_period", 10))
+        self._dir = 1
+
+    def on_bar(self, bar: dict, ctx) -> Signal:
+        tail = ctx.history[-(self.period * 4 + 40):]
+        closes = [b["c"] for b in tail]
+        if len(closes) < self.period * 3:
+            return Signal("none", "预热中")
+        c = bar["c"]
+        atr = calc_atr(ctx.history, self.atr_period)
+        if not atr:
+            return Signal("none", "预热中")
+        hl2 = (bar["h"] + bar["l"]) / 2.0
+        ub, lb = hl2 + self.mult * atr, hl2 - self.mult * atr
+        # 简化方向判定：价格相对轨的延续（非严格递归，够筛选用）
+        prev_c = closes[-2]
+        if c > prev_c:
+            d = 1 if prev_c >= self._dir * 0 else 1
+        pos = ctx.position
+        if pos.is_open:
+            stop = c - self.mult * atr if pos.side == "long" else c + self.mult * atr
+            self.sl_px = stop
+            self._dir = 1 if pos.side == "long" else -1
+            return Signal("none")
+        # 空仓：跟踪最近 N 根的上/下轨方向
+        up_ok = c > lb
+        dn_ok = c < ub
+        if up_ok and not dn_ok and closes[-1] > closes[-min(len(closes), 5)]:
+            self.sl_px = c - self.mult * atr
+            self.tp_px = None
+            self._dir = 1
+            return Signal("open_long", "super上行")
+        if dn_ok and not up_ok:
+            self.sl_px = c + self.mult * atr
+            self.tp_px = None
+            self._dir = -1
+            return Signal("open_short", "super下行")
+        return Signal("none")
+
+
+class TsMom(Strategy):
+    """时间序列动量：N 期收益>0 且趋势过滤(价>EMA200)做多，收益转负离场（做空镜像）。"""
+
+    name = "ts_momentum"
+
+    def __init__(self, params: dict):
+        super().__init__(params)
+        self.lookback = int(params.get("lookback", 96))   # 96 根 15m = 24h
+        self.ema_len = int(params.get("ema_len", 200))
+        self.atr_period = int(params.get("atr_period", 14))
+        self.atr_sl_mult = float(params.get("atr_sl_mult", 3.0))
+
+    def on_bar(self, bar: dict, ctx) -> Signal:
+        tail = ctx.history[-(self.lookback + self.ema_len + 30):]
+        closes = [b["c"] for b in tail]
+        if len(closes) < self.lookback + 5:
+            return Signal("none", "预热中")
+        c = bar["c"]
+        ret = c / closes[-self.lookback - 1] - 1.0
+        ema_l = calc_sma(closes, self.ema_len)
+        if ema_l is None:
+            return Signal("none")
+        pos = ctx.position
+        if pos.is_open:
+            if pos.side == "long" and ret <= 0:
+                return Signal("close", "动量转负")
+            if pos.side == "short" and ret >= 0:
+                return Signal("close", "动量转正")
+            return Signal("none")
+        atr = calc_atr(ctx.history, self.atr_period) or c * 0.005
+        if ret > 0.002 and c > ema_l:
+            self.sl_px = c - atr * self.atr_sl_mult
+            self.tp_px = None
+            return Signal("open_long", f"动量 {ret*100:.1f}%")
+        if ret < -0.002 and c < ema_l:
+            self.sl_px = c + atr * self.atr_sl_mult
+            self.tp_px = None
+            return Signal("open_short", f"动量 {ret*100:.1f}%")
+        return Signal("none")
+
+
+class StochRsiRevert(Strategy):
+    """随机 RSI 均值回归：K<lo 且价>长均线做多，K>exit 或反弹到短均线离场。"""
+
+    name = "stoch_rsi"
+
+    def __init__(self, params: dict):
+        super().__init__(params)
+        self.rsi_len = int(params.get("rsi_len", 14))
+        self.stoch_len = int(params.get("stoch_len", 14))
+        self.lo = float(params.get("lo", 10.0))
+        self.exit_k = float(params.get("exit_k", 70.0))
+        self.sma_len = int(params.get("sma_len", 200))
+        self.exit_ma = int(params.get("exit_ma", 5))
+        self.atr_period = int(params.get("atr_period", 14))
+        self.atr_sl_mult = float(params.get("atr_sl_mult", 2.0))
+
+    def _stoch(self, closes):
+        rs = []
+        for i in range(self.stoch_len + 1, len(closes) + 1):
+            w = closes[i - self.stoch_len - 1:i]
+            lo, hi = min(w), max(w)
+            last = calc_rsi(w, self.rsi_len)
+            if last is None:
+                return None
+            rs.append(100.0 * (last - lo) / (hi - lo) if hi > lo else 50.0)
+        return rs[-1] if rs else None
+
+    def on_bar(self, bar: dict, ctx) -> Signal:
+        tail = ctx.history[-(self.sma_len + self.stoch_len * 3 + 60):]
+        closes = [b["c"] for b in tail]
+        if len(closes) < self.sma_len + self.stoch_len * 2:
+            return Signal("none", "预热中")
+        sma = calc_sma(closes, self.sma_len)
+        ema5 = calc_sma(closes, self.exit_ma)
+        k = self._stoch(closes)
+        if None in (sma, ema5, k):
+            return Signal("none")
+        c = bar["c"]
+        pos = ctx.position
+        if pos.is_open:
+            if pos.side == "long" and (k > self.exit_k or c > ema5):
+                return Signal("close", "回抽到位")
+            if pos.side == "short" and (k < 100 - self.exit_k or c < ema5):
+                return Signal("close", "回抽到位")
+            return Signal("none")
+        atr = calc_atr(ctx.history, self.atr_period) or c * 0.005
+        if k < self.lo and c > sma:
+            self.sl_px = c - atr * self.atr_sl_mult
+            self.tp_px = None
+            return Signal("open_long", f"StochK={k:.0f}")
+        if k > 100 - self.lo and c < sma:
+            self.sl_px = c + atr * self.atr_sl_mult
+            self.tp_px = None
+            return Signal("open_short", f"StochK={k:.0f}")
+        return Signal("none")
