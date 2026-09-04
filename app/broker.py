@@ -77,13 +77,27 @@ class Broker:
         raise NotImplementedError
 
     # ---- 公共 ----
+    def _margin_budget(self) -> float:
+        """保证金预算：margin_frac>0 按可用资金比例；否则固定 margin_per_trade（上限余额）。"""
+        avail = self.available_for_margin()
+        if self.risk.margin_frac > 0:
+            return avail * self.risk.margin_frac
+        return min(self.risk.margin_per_trade, avail)
+
+    def available_for_margin(self) -> float:
+        """可用于保证金的资金（paper=钱包余额，live=交易所可用）。"""
+        return 0.0
+
     def compute_size(self, price: float) -> tuple[float, float]:
         """按保证金×杠杆计算开仓量，上限 max_notional，取整到 lot。
 
         返回 (张数, ETH 数量)；不满足最小下单量时返回 (0, 0)。
         """
         spec = self.feed.spec
-        notional = min(self.risk.margin_per_trade * self.risk.leverage, self.risk.max_notional)
+        budget = self._margin_budget()
+        if budget <= 0:
+            return 0, 0
+        notional = min(budget * self.risk.leverage, self.risk.max_notional)
         eth = notional / price if price > 0 else 0.0
         contracts = okx_math.round_to_lot(okx_math.eth_to_contracts(eth, spec.ct_val), spec.lot_sz)
         if contracts < spec.min_sz:
@@ -126,6 +140,9 @@ class PaperBroker(Broker):
     @property
     def taker_fee(self) -> float:
         return self.feed.taker_fee
+
+    def available_for_margin(self) -> float:
+        return self.wallet.balance
 
     async def _fill_price(self, side: str, size_eth: float) -> float:
         await self.feed.ensure_order_book()
@@ -219,6 +236,9 @@ class LiveBroker(Broker):
         self.exchange = feed.exchange
         self.equity_usdt: float = 0.0
         self.available_usdt: float = 0.0
+
+    def available_for_margin(self) -> float:
+        return self.available_usdt
 
     async def _set_leverage(self) -> None:
         try:

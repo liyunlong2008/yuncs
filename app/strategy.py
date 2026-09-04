@@ -20,6 +20,7 @@ def create_strategy(name: str, params: dict) -> "Strategy":
     registry = {
         TrendEma.name: TrendEma,
         DonchianBreakout.name: DonchianBreakout,
+        RsiRevert.name: RsiRevert,
     }
     cls = registry.get(name or TrendEma.name, TrendEma)
     return cls(params or {})
@@ -118,7 +119,6 @@ class TrendEma(Strategy):
     """EMA 快慢交叉顺势 + ATR 动态止损 + 固定盈亏比止盈。"""
 
     name = "trend_ema"
-
     def arm_open_stop(self, history: list[dict], side: str, entry: float) -> None:
         """重启恢复持仓：按 ATR 重挂硬止损（无止盈目标，等信号/移动逻辑接管）。"""
         atr = calc_atr(history, self.atr_period)
@@ -255,3 +255,91 @@ class DonchianBreakout(Strategy):
         prev_lows = [b["l"] for b in history[-(self.entry_len + 1):-1]]
         return {"pos": "flat", "hi": max(prev_highs), "lo": min(prev_lows),
                 "note": f"突破前{self.entry_len}根通道"}
+
+
+def calc_rsi(closes: list[float], period: int = 2) -> Optional[float]:
+    """RSI（Wilder 平滑），取序列末端值。"""
+    if len(closes) < period + 2:
+        return None
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        ch = closes[i] - closes[i - 1]
+        gains.append(max(ch, 0.0))
+        losses.append(max(-ch, 0.0))
+
+    def wilder(vals):
+        out = [sum(vals[:period]) / period]
+        for v in vals[period:]:
+            out.append((out[-1] * (period - 1) + v) / period)
+        return out
+
+    ag, al = wilder(gains), wilder(losses)
+    avg_gain, avg_loss = ag[-1], al[-1]
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - 100.0 / (1.0 + rs)
+
+
+class RsiRevert(Strategy):
+    """均值回归：RSI(2) 超卖/超买 + 长周期均线趋势过滤（Connors 风格）。
+
+    - 做多：RSI(2)<lo 且 收盘 > 长均线(趋势向上不逆势) → 反弹到短均线止盈
+    - 做空：RSI(2)>hi 且 收盘 < 长均线 → 回落到短均线止盈
+    - 保护：ATR 硬止损（防极端行情），无固定止盈（均值回归到短均线自然离场）
+    """
+
+    name = "rsi_revert"
+
+    def __init__(self, params: dict):
+        super().__init__(params)
+        self.rsi_len = int(params.get("rsi_len", 2))
+        self.lo = float(params.get("lo", 10.0))
+        self.hi = float(params.get("hi", 90.0))
+        self.sma_len = int(params.get("sma_len", 200))
+        self.exit_ma = int(params.get("exit_ma", 5))
+        self.exit_rsi = bool(params.get("exit_rsi", True))  # False=只按均线离场，让反弹跑到位
+        self.atr_period = int(params.get("atr_period", 14))
+        self.atr_sl_mult = float(params.get("atr_sl_mult", 3.0))
+
+    def _sma(self, closes: list[float], n: int) -> Optional[float]:
+        if len(closes) < n:
+            return None
+        return sum(closes[-n:]) / n
+
+    def on_bar(self, bar: dict, ctx) -> Signal:
+        # 限窗：只取最近一段历史，避免 O(n²)
+        tail = ctx.history[-(self.sma_len * 2 + 60):]
+        closes = [b["c"] for b in tail]
+        if len(closes) < self.sma_len + 5:
+            return Signal("none", "预热中")
+        sma = self._sma(closes, self.sma_len)
+        ema5 = self._sma(closes, self.exit_ma)
+        rsi = calc_rsi(closes, self.rsi_len)
+        if None in (sma, ema5, rsi):
+            return Signal("none", "预热中")
+        pos = ctx.position
+        c = bar["c"]
+        if pos.is_open:
+            # 反弹/回落到短均线即离场
+            if pos.side == "long" and (c > ema5 or (self.exit_rsi and rsi > 50)):
+                return Signal("close", "反弹到位")
+            if pos.side == "short" and (c < ema5 or (self.exit_rsi and rsi < 50)):
+                return Signal("close", "回落到位")
+            return Signal("none")
+        # 开仓：只在趋势方向顺势做均值回归
+        if c > sma and rsi < self.lo:
+            self.sl_px = c - (calc_atr(ctx.history, self.atr_period) or c * 0.005) * self.atr_sl_mult
+            self.tp_px = None
+            return Signal("open_long", f"超卖反弹 RSI={rsi:.0f}")
+        if c < sma and rsi > self.hi:
+            self.sl_px = c + (calc_atr(ctx.history, self.atr_period) or c * 0.005) * self.atr_sl_mult
+            self.tp_px = None
+            return Signal("open_short", f"超买回落 RSI={rsi:.0f}")
+        return Signal("none")
+
+    def arm_open_stop(self, history: list[dict], side: str, entry: float) -> None:
+        atr = calc_atr(history, self.atr_period) or entry * 0.005
+        self.sl_px = entry - atr * self.atr_sl_mult if side == "long" \
+            else entry + atr * self.atr_sl_mult
+        self.tp_px = None
