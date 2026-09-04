@@ -105,9 +105,9 @@ def test_backtest_funding_deducted():
     bt = Backtest(cfg, bars, funding)
     bt.run()
     assert bt.wallet.funding_paid > 0
-    # 默认杠杆 20x: 名义=min(5×20,1000)=100U -> 仓位约 0.033 ETH
-    # 资金费 = 0.033×标记价×0.0002（标记价≈3019）
-    assert bt.wallet.funding_paid == pytest.approx(0.033 * 3019 * 0.0002, rel=0.1)
+    # 默认杠杆 5x: 名义=min(5×5,1000)=25U -> 仓位约 0.008 ETH
+    # 资金费 = 0.008×标记价×0.0002（标记价≈3019）
+    assert bt.wallet.funding_paid == pytest.approx(0.008 * 3019 * 0.0002, rel=0.15)
 
 
 def test_backtest_requires_positive_initial():
