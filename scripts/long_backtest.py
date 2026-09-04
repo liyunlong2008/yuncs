@@ -24,9 +24,17 @@ async def ensure_bars(feed, cfg, tf: str, start: str, end: str) -> list[dict]:
         path = data.day_cache_path(tf, day)
         day_bars = data.load_candles_csv(path)
         if day_bars is None:
-            day_bars = await data.download_candles(
-                feed.exchange, cfg.exchange.symbol, tf,
-                data.date_to_ms(day), data.date_to_ms(day) + data.DAY_MS)
+            for attempt in range(4):
+                try:
+                    day_bars = await data.download_candles(
+                        feed.exchange, cfg.exchange.symbol, tf,
+                        data.date_to_ms(day), data.date_to_ms(day) + data.DAY_MS)
+                    break
+                except Exception as e:
+                    print(f"  {day} 下载失败({attempt+1}/4): {str(e)[:60]}", flush=True)
+                    await asyncio.sleep(5 * (attempt + 1))
+            if day_bars is None:
+                raise RuntimeError(f"连续失败: {day} {tf}")
             data.save_candles_csv(path, day_bars)
             print(f"  下载 {day} {tf}: {len(day_bars)} 根", flush=True)
         bars.extend(day_bars)

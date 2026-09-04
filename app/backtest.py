@@ -29,6 +29,8 @@ class Backtest:
         self.spec = spec or InstrumentSpec()  # 默认值即 OKX ETH-USDT-SWAP 当前规格
         # compounding=True = 实盘语义：周期结束不重置钱包，下一周期从当前余额起算（连续复利）
         self.compounding = compounding
+        # margin_frac>0 = 保证金随权益缩放（实盘避免跌破固定保证金停摆；0=固定 margin_per_trade）
+        self.margin_frac = float(getattr(cfg.risk, "margin_frac", 0.0) or 0.0)
         self._initial0 = cfg.challenge.initial_balance
         self.strategy = create_strategy(cfg.strategy.name, cfg.strategy.params)
         initial = cfg.challenge.initial_balance
@@ -147,7 +149,15 @@ class Backtest:
         if self.position.is_open or sig.action not in ("open_long", "open_short"):
             return
         side = "long" if sig.action == "open_long" else "short"
-        contracts, size_eth = self._size(bar["o"])
+        # 保证金预算：缩放模式按当前可用余额比例；否则固定 margin_per_trade（受余额限制）
+        if self.margin_frac > 0:
+            margin_budget = self.wallet.balance * self.margin_frac
+        else:
+            margin_budget = min(self.cfg.risk.margin_per_trade, self.wallet.balance)
+        if margin_budget <= 0:
+            return
+        notional_cap = min(margin_budget * self.cfg.risk.leverage, self.cfg.risk.max_notional)
+        contracts, size_eth = self._size(bar["o"], notional_cap)
         if contracts <= 0:
             return
         fill = fills.candle_fill_price(bar, "buy" if side == "long" else "sell",
@@ -206,9 +216,10 @@ class Backtest:
                 return f["ts"]
         return None
 
-    def _size(self, price: float) -> tuple[float, float]:
-        notional = min(self.cfg.risk.margin_per_trade * self.cfg.risk.leverage,
-                       self.cfg.risk.max_notional)
+    def _size(self, price: float, notional: float | None = None) -> tuple[float, float]:
+        if notional is None:
+            notional = min(self.cfg.risk.margin_per_trade * self.cfg.risk.leverage,
+                           self.cfg.risk.max_notional)
         eth = notional / price if price > 0 else 0.0
         contracts = okx_math.round_to_lot(
             okx_math.eth_to_contracts(eth, self.spec.ct_val), self.spec.lot_sz)

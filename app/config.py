@@ -34,6 +34,7 @@ class ExchangeConfig(BaseModel):
 class RiskConfig(BaseModel):
     leverage: int = 20       # 开仓杠杆（donchian+20u 推荐 20~50x；100x 下通道止损比强平价远，会先被强平）
     margin_per_trade: float = 5
+    margin_frac: float = 0   # 0=固定 margin_per_trade；>0=保证金随余额按比例缩放（实盘防跌破固定保证金停摆）
     max_notional: float = 1000
     slippage_bps: float = 1.0
     liquidation_buffer: float = 0.05
