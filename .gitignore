@@ -16,3 +16,4 @@ config.toml
 data/
 logs/
 *.log
+vps_*.json
