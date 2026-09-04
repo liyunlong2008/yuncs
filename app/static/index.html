@@ -88,7 +88,13 @@
   </div>
 </section>
 
-<!-- 当前持仓：空仓时整卡隐藏 -->
+<!-- 交易状态：空仓显示等待信号，有仓走下方完整卡片 -->
+<section id="flatStatus">
+  <h3>交易状态</h3>
+  <div style="font-size:15px" id="watchLine">空仓 · 预热中…</div>
+</section>
+
+<!-- 当前持仓：有仓时展开 -->
 <section id="posCard" style="display:none">
   <h3>当前持仓
     <span class="bd" id="posSideBd"></span>
@@ -178,10 +184,11 @@ function render(s){
   $('guard').textContent=n(c.guard_level,2);
   $('room').textContent=n((c.equity||0)-(c.guard_level||0),2)+' USDT';
 
-  // 持仓：空仓整卡隐藏
+  // 持仓/交易状态：空仓显示等待位，有仓展开完整卡
   const open=p&&p.side&&p.size_eth;
   const card=$('posCard');
   const bd=$('posSideBd');
+  $('flatStatus').style.display=open?'none':'';
   if(open){
     card.style.display='';
     bd.textContent=p.side==='long'?'做多':'做空';
@@ -201,6 +208,12 @@ function render(s){
     $('pRoR').className='v n '+(rr>0?'g':rr<0?'r':'');
   }else{
     card.style.display='none';
+    const w=s.watch||{};
+    if(w.hi!=null&&w.lo!=null){
+      $('watchLine').innerHTML='空仓 · 等突破：<b class="g">↑ '+n(w.hi,2)+'</b> 做多 / <b class="r">↓ '+n(w.lo,2)+'</b> 做空';
+    }else{
+      $('watchLine').textContent='空仓 · '+(w.note||'等待信号');
+    }
   }
 
   if(c.equity!=null)push(s.ts,c.equity);

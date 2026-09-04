@@ -61,6 +61,10 @@ class Strategy:
         """进程重启恢复持仓后重挂保护止损（子类按各自规则实现；基类默认不动作）。"""
         pass
 
+    def describe(self, history: list[dict], position) -> dict:
+        """看板用：策略当前状态（子类覆盖）。position 为 broker.Position。"""
+        return {"pos": position.side if getattr(position, "is_open", False) else "flat"}
+
 
 def ema(values: list[float], period: int) -> list[float]:
     """EMA 序列（长度与输入一致，预热期为 None 由调用方保证足够长度）。"""
@@ -205,3 +209,14 @@ class DonchianBreakout(Strategy):
         """重启恢复持仓：用历史 K 线立即重挂移动通道止损。"""
         self.sl_px = self._channel_stop(history, side)
         self.tp_px = None
+
+    def describe(self, history: list[dict], position) -> dict:
+        """看板：空仓时给出当前等待突破的触发位（多/空），有仓则只报方向。"""
+        if getattr(position, "is_open", False):
+            return {"pos": position.side}
+        if len(history) < self.entry_len + 1:
+            return {"pos": "flat", "note": "预热中…"}
+        prev_highs = [b["h"] for b in history[-(self.entry_len + 1):-1]]
+        prev_lows = [b["l"] for b in history[-(self.entry_len + 1):-1]]
+        return {"pos": "flat", "hi": max(prev_highs), "lo": min(prev_lows),
+                "note": f"突破前{self.entry_len}根通道"}

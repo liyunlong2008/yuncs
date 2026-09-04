@@ -304,6 +304,7 @@ class Engine:
         snap["ts"] = time.time()
         snap["running"] = not self._stop_requested
         snap["feed_mode"] = "rest" if self.feed._rest_mode else "ws"
+        snap["watch"] = self.strategy.describe(self._bars, self.broker.position)
         if self.wallet:
             snap["wallet"] = self.broker.wallet_view()
         return snap
