@@ -69,6 +69,7 @@ store / api / static      持久化 / FastAPI / 看板
 ## 7. 测试与验收
 
 - 改动必须跑 `uv run pytest`，全过才算完成；新增/修改 `okx_math`、`challenge`、`fills`、`strategy` 必须同步改单测
+- **回测语义红线：默认/单次回测结论必须用实盘连续语义（`Backtest(compounding=True)`）复核**——纸盘重置语义会掩盖复利损耗（曾致"回测看起来像样、实盘语义 1年/3年 全归零"的判断偏差）。新策略/改参数想宣称"盈利"，必须给 compounding 模式的期末倍数；无法转正一律按"期望为负"对待
 - 关键不变量：强平价公式对照 OKX 官方口径（`test_margin_consistency_at_liquidation`）、容忍率线性无悬崖（`test_tolerance_linear_no_cliff`）、锁利/止损/超时/轮次重置、回测确定性（`test_backtest_deterministic`：相同输入 → 相同输出）
 - **纸盘验证必须覆盖 WS 与 REST 两种 feed**：曾因 WS 收盘检测 bug，VPS 一天不开仓而本地（REST）回测正常——本地 REST 跑通不算完成，还需在直连 OKX 的环境（VPS）确认 WS 路径正常（判断标准：日志周期性出现"新 K 线"，且该时段回测有信号时能实际开仓）
 - **回测能开仓而实盘/纸盘不开仓 → 第一排查数据管道（K 线是否到达引擎），不是策略**
