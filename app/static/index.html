@@ -60,6 +60,15 @@
   .sd{font-weight:600}
   .sd.long{color:var(--green)}.sd.short{color:var(--red)}
   .empty{color:var(--label);text-align:center;padding:30px 0}
+  /* 仿 OKX 成交记录：徽章行 + 2 列字段网格，紧凑 */
+  .fill{padding:10px 0;border-bottom:1px solid #f4f5f7}
+  .fill:last-child{border-bottom:none}
+  .fill .frow{display:flex;align-items:center;gap:6px;font-size:13px}
+  .fill .frow .tm{margin-left:auto;color:var(--label);font-size:12px}
+  .fill .fgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px 10px;margin-top:6px}
+  .fill .fgrid .k{font-size:11px;color:var(--label)}
+  .fill .fgrid .v{font-size:15px;font-weight:600;margin-top:1px}
+  .more{color:var(--label);font-size:12px;text-align:center;padding:6px 0 0}
 </style>
 </head>
 <body>
@@ -123,7 +132,7 @@
 <!-- 最近成交 -->
 <section>
   <h3>最近成交</h3>
-  <table style="margin-top:8px"><thead><tr><th>时间</th><th>方向</th><th>金额</th><th>开仓价</th><th>盈亏</th></tr></thead><tbody id="trades"></tbody></table>
+  <div id="trades" style="margin-top:4px"></div>
 </section>
 
 <!-- 周期历史 -->
@@ -220,13 +229,25 @@ function render(s){
 }
 async function loadTrades(){
   try{
-    const r=await(await fetch('/api/trades?limit=10')).json();
-    $('trades').innerHTML=r.map(t=>`<tr>
-      <td class="lb">${tm(t.ts)}</td>
-      <td><span class="sd ${t.side||''}">${t.side==='long'?'开多':t.side==='short'?'开空':'平仓'}</span></td>
-      <td class="n">${n(t.size_eth*t.entry,1)}</td>
-      <td class="n">${n(t.entry,1)}</td>
-      <td class="n ${cl(t.pnl)}">${s2(t.pnl,2)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">暂无成交</td></tr>';
+    const r=await(await fetch('/api/trades?limit=5')).json();
+    if(!r.length){$('trades').innerHTML='<div class="empty">暂无成交</div>';return;}
+    $('trades').innerHTML=r.map(t=>{
+      const amt=t.size_eth*t.entry;
+      const mg=amt/(s.leverage||1);
+      const ror=mg>0?(t.pnl/mg*100):0;
+      return `<div class="fill">
+        <div class="frow">
+          <span class="bd ${t.side==='long'?'long':'short'}">${t.side==='long'?'开多':'开空'}</span>
+          <span class="bd gray">${t.reason||''}</span>
+          <span class="tm">${tm(t.ts)}</span>
+        </div>
+        <div class="fgrid">
+          <div><div class="k">成交额 (USDT)</div><div class="v n">${n(amt,1)}</div></div>
+          <div><div class="k">成交均价</div><div class="v n">${n(t.entry,2)}</div></div>
+          <div><div class="k">平仓盈亏</div><div class="v n ${cl(t.pnl)}">${s2(t.pnl,2)}（${(ror>=0?'+':'')+ror.toFixed(1)}%）</div></div>
+        </div>
+      </div>`;
+    }).join('');
   }catch(e){}
 }
 async function loadRuns(){
