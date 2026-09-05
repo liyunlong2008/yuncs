@@ -233,7 +233,7 @@ async function loadTrades(){
     if(!r.length){$('trades').innerHTML='<div class="empty">暂无成交</div>';return;}
     $('trades').innerHTML=r.map(t=>{
       const amt=t.size_eth*t.entry;
-      const mg=amt/(s.leverage||1);
+      const mg=amt/5; // 杠杆固定按当前配置 5x 估算保证金口径
       const ror=mg>0?(t.pnl/mg*100):0;
       return `<div class="fill">
         <div class="frow">
@@ -248,7 +248,7 @@ async function loadTrades(){
         </div>
       </div>`;
     }).join('');
-  }catch(e){}
+  }catch(e){console.warn('trades render',e);}
 }
 async function loadRuns(){
   try{
