@@ -348,6 +348,18 @@ class RsiRevert(Strategy):
             else entry + atr * self.atr_sl_mult
         self.tp_px = None
 
+    def describe(self, history: list[dict], position) -> dict:
+        """看板：等待条件 = 顺势方向 + RSI 极值。展示趋势线与当前 RSI。"""
+        if getattr(position, "is_open", False):
+            return {"pos": position.side}
+        tail = history[-(self.sma_len * 2 + 60):]
+        closes = [b["c"] for b in tail]
+        sma = calc_sma(closes, self.sma_len)
+        rsi = calc_rsi(closes, self.rsi_len)
+        return {"pos": "flat", "sma": sma, "rsi": rsi,
+                "note": f"等 RSI{self.rsi_len}<{self.lo:.0f}(价>SMA{self.sma_len}) 做多 / "
+                        f">{self.hi:.0f}(价<SMA{self.sma_len}) 做空"}
+
 
 def calc_sma(closes: list[float], n: int) -> Optional[float]:
     if len(closes) < n:
