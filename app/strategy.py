@@ -357,8 +357,8 @@ class RsiRevert(Strategy):
         sma = calc_sma(closes, self.sma_len)
         rsi = calc_rsi(closes, self.rsi_len)
         return {"pos": "flat", "sma": sma, "rsi": rsi,
-                "note": f"等 RSI{self.rsi_len}<{self.lo:.0f}(价>SMA{self.sma_len}) 做多 / "
-                        f">{self.hi:.0f}(价<SMA{self.sma_len}) 做空"}
+                "note": f"做多需：价格在 SMA{self.sma_len} 上方 且 RSI{self.rsi_len} 跌破 {self.lo:.0f}；"
+                        f"做空需：价格在 SMA{self.sma_len} 下方 且 RSI{self.rsi_len} 冲上 {self.hi:.0f}"}
 
 
 def calc_sma(closes: list[float], n: int) -> Optional[float]:

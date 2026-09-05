@@ -221,9 +221,15 @@ function render(s){
     if(w.hi!=null&&w.lo!=null){
       $('watchLine').innerHTML='空仓 · 等突破：<b class="g">↑ '+n(w.hi,2)+'</b> 做多 / <b class="r">↓ '+n(w.lo,2)+'</b> 做空';
     }else if(w.sma!=null&&w.rsi!=null){
-      $('watchLine').innerHTML='空仓 · '+ (w.note||'') +
-        '<br>趋势线 SMA200 <b>'+n(w.sma,2)+'</b>（现价'+(s.price>=w.sma?'上方':'下方')+'）· '+
-        'RSI2 <b class="'+(w.rsi<10?'g':w.rsi>90?'r':'')+'">'+w.rsi.toFixed(0)+'</b>';
+      const above=s.price>w.sma;
+      const gate=above?'现价在趋势线<b>上方</b>，只等 <b>做多</b> 信号'
+                      :'现价在趋势线<b>下方</b>，只等 <b>做空</b> 信号';
+      $('watchLine').innerHTML='<div>空仓 · '+gate+'</div>'+
+        '<div style="color:var(--label);font-size:13px;line-height:1.8;margin-top:4px">'+
+        (w.note||'')+'<br>'+
+        '当前：趋势线 SMA200 <b style="color:var(--tx)">'+n(w.sma,2)+'</b>'+
+        ' · RSI2 <b class="'+(w.rsi<10?'g':w.rsi>90?'r':'')+'">'+w.rsi.toFixed(0)+'</b>'+
+        '</div>';
     }else{
       $('watchLine').textContent='空仓 · '+(w.note||'等待信号');
     }
