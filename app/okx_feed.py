@@ -337,14 +337,44 @@ class OkxFeed:
 
     # ---------- 历史数据（预热与回测） ----------
     async def fetch_ohlcv_history(self, timeframe: str, limit: int = 300) -> list[dict]:
-        """拉最近 N 根 K 线做指标预热。"""
-        raw = await self.exchange.fetch_ohlcv(self.cfg.symbol, timeframe, limit=min(limit, 300))
-        bars = [{"ts": float(c[0]), "o": float(c[1]), "h": float(c[2]),
-                 "l": float(c[3]), "c": float(c[4]), "v": float(c[5])} for c in raw]
+        """预热：拉最近 N 根已收盘 K 线，OKX 原生 after 反向翻页（300/次，凑够为止）。
+
+        历史接口返回"已结算"K 线；仍按 ts <= now-bar_ms 兜底过滤一次（与
+        收盘判定纪律一致），返回升序去重后的 bars，并推进 last_closed_ts。
+        """
+        bar_ms = self._bar_duration_ms()
+        market = self.exchange.market(self.cfg.symbol)
+        inst_id = market["id"]
+        bar = (self.exchange.timeframes or {}).get(timeframe, timeframe)
+        raw: list[list] = []
+        now_ms = int(time.time() * 1000)
+        cursor = now_ms + bar_ms  # after=返回该 ts 之前的记录（新→旧）
+        while len(raw) < limit:
+            resp = await self.exchange.publicGetMarketHistoryCandles(
+                {"instId": inst_id, "bar": bar, "after": cursor,
+                 "limit": min(300, limit - len(raw))})
+            batch = resp.get("data", [])
+            if not batch:
+                break
+            raw.extend(batch)
+            oldest = int(batch[-1][0])  # OKX after/before 必须是整数 ms
+            if oldest >= cursor:
+                break
+            cursor = oldest
+            if len(batch) < min(300, limit):  # 已到历史尽头
+                break
+            await asyncio.sleep(0.15)
+
+        seen: dict[float, list] = {}
+        for c in raw:
+            ts = float(c[0])
+            if ts <= now_ms - bar_ms:  # 只认已收盘
+                seen[ts] = c
+        bars = [{"ts": t, "o": float(c[1]), "h": float(c[2]),
+                 "l": float(c[3]), "c": float(c[4]), "v": float(c[5])}
+                for t, c in sorted(seen.items())][-limit:]
         if bars:
-            # 最后一根可能是"进行中"，last_closed_ts 取已收盘的倒数第二根，避免吞掉紧接着要收盘的那根
-            closed = bars[-2] if len(bars) > 1 else bars[-1]
-            self.last_closed_ts = closed["ts"]
+            self.last_closed_ts = bars[-1]["ts"]
             self.price = bars[-1]["c"]
         return bars
 

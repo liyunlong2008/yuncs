@@ -12,8 +12,19 @@ from loguru import logger
 
 from . import fills, okx_math
 from .config import ExchangeConfig, RiskConfig
-from .okx_feed import OkxFeed
+from .okx_feed import InstrumentSpec, OkxFeed
 from .wallet import Wallet
+
+
+def fraction_eth_for_spec(spec: InstrumentSpec, plan_eth: float, frac: float) -> float:
+    """按计划量切分批仓位：张数取整到 lot、不足最小单量返回 0（三模式同口径）。"""
+    if plan_eth <= 0 or frac <= 0:
+        return 0.0
+    cts = okx_math.round_to_lot(
+        okx_math.eth_to_contracts(plan_eth, spec.ct_val) * frac, spec.lot_sz)
+    if cts < spec.min_sz:
+        return 0.0
+    return okx_math.contracts_to_eth(cts, spec.ct_val)
 
 
 @dataclass
@@ -21,7 +32,7 @@ class Position:
     side: str = ""            # long / short / ""
     size_eth: float = 0.0
     entry: float = 0.0
-    margin: float = 0.0       # 占用保证金 USDT
+    margin: float = 0.0       # 占用保证金 USDT（分批加仓 = 各批初始保证金之和）
     liq_px: float = 0.0
     cost_usdt: float = 0.0    # 含手续费总成本 USDT
     cost_price: float = 0.0   # 含手续费平均成本价 USDT/ETH
@@ -54,6 +65,94 @@ class Position:
         }
 
 
+# ---------- 纸盘/回测共享记账核心（与 OKX 线性口径一致，禁止别处自创公式） ----------
+
+def open_position_math(wallet: Wallet, side: str, size_eth: float, fill: float,
+                       fee_rate: float, leverage: float, mmr: float,
+                       now_ts: Optional[float] = None) -> Optional[Position]:
+    """新开仓记账：锁保证金 + 付开仓费 + 按 OKX 公式算强平价。
+
+    保证金不足返回 None（账不动），由调用方按各自模式提示。
+    """
+    notional_usdt = okx_math.notional(size_eth, fill)
+    fee = notional_usdt * fee_rate
+    margin = okx_math.margin_required(notional_usdt, leverage)
+    if margin > wallet.balance:
+        return None
+    wallet.lock_margin(margin)
+    wallet.pay_fee(fee)
+    liq = okx_math.liquidation_price(side, fill, size_eth, margin, mmr, fee_rate)
+    return Position(
+        side=side, size_eth=size_eth, entry=fill, margin=margin, liq_px=liq,
+        cost_usdt=okx_math.cost_including_fee(fill, size_eth, fee_rate),
+        cost_price=okx_math.cost_price_including_fee(fill, fee_rate),
+        fee=fee, open_ts=now_ts if now_ts is not None else time.time(),
+    )
+
+
+def add_position_math(wallet: Wallet, pos: Position, size_eth: float, fill: float,
+                      fee_rate: float, leverage: float, mmr: float) -> Optional[Position]:
+    """同向分批加仓记账：加权均价、累计保证金、按累计口径重算强平价。
+
+    只允许同向；保证金不足返回 None（原仓不动）。open_ts 保留首笔时间。
+    """
+    if not pos.is_open or size_eth <= 0:
+        return None
+    add_notional = okx_math.notional(size_eth, fill)
+    fee = add_notional * fee_rate
+    margin = okx_math.margin_required(add_notional, leverage)
+    if margin > wallet.balance:
+        return None
+    wallet.lock_margin(margin)
+    wallet.pay_fee(fee)
+    new_size = pos.size_eth + size_eth
+    entry = (pos.entry * pos.size_eth + fill * size_eth) / new_size
+    total_margin = pos.margin + margin
+    liq = okx_math.liquidation_price(pos.side, entry, new_size, total_margin, mmr, fee_rate)
+    return Position(
+        side=pos.side, size_eth=new_size, entry=entry, margin=total_margin,
+        liq_px=liq,
+        cost_usdt=okx_math.cost_including_fee(entry, new_size, fee_rate),
+        cost_price=okx_math.cost_price_including_fee(entry, fee_rate),
+        fee=pos.fee + fee, open_ts=pos.open_ts,
+    )
+
+
+def close_position_math(wallet: Wallet, pos: Position, fill_px: float, fee_rate: float,
+                        mmr: float, frac: float = 1.0,
+                        reason: str = "") -> tuple[dict, Position]:
+    """平掉持仓的 frac 比例（0<frac<=1，1=全平）。
+
+    按加权均价计已实现盈亏，解锁 frac 对应保证金（保证金与名义线性，
+    按比例精确），手续费 = 平仓费 + 已平部分的开仓费；返回
+    (成交记录 dict 同 trades 口径, 剩余仓位按累计口径重算强平价或空仓)。
+    """
+    if not pos.is_open or frac <= 0:
+        return {}, pos
+    frac = min(frac, 1.0)
+    closed = pos.size_eth * frac
+    pnl = okx_math.unrealized_pnl(pos.side, pos.entry, fill_px, closed)
+    fee = okx_math.notional(closed, fill_px) * fee_rate + pos.fee * frac
+    wallet.unlock_margin(pos.margin * frac)
+    wallet.pay_fee(fee)
+    wallet.add_pnl(pnl)
+    rec = {
+        "ts": pos.open_ts, "side": pos.side, "size_eth": closed,
+        "entry": pos.entry, "exit": fill_px, "pnl": pnl,
+        "fee": fee, "funding": 0.0, "reason": reason,
+    }
+    remain = pos.size_eth - closed
+    if remain <= 1e-12:
+        return rec, Position()
+    rem_margin = pos.margin * (1.0 - frac)
+    liq = okx_math.liquidation_price(pos.side, pos.entry, remain, rem_margin, mmr, fee_rate)
+    return rec, Position(
+        side=pos.side, size_eth=remain, entry=pos.entry, margin=rem_margin,
+        liq_px=liq, cost_usdt=pos.cost_usdt * (1.0 - frac),
+        cost_price=pos.cost_price, fee=pos.fee * (1.0 - frac), open_ts=pos.open_ts,
+    )
+
+
 class Broker:
     """统一接口：策略与引擎只依赖这个抽象。"""
 
@@ -70,7 +169,13 @@ class Broker:
     async def open_position(self, side: str, size_eth: float) -> Position:
         raise NotImplementedError
 
-    async def close_position(self, reason: str = "", fill_px: Optional[float] = None) -> dict:
+    async def add_position(self, side: str, size_eth: float) -> Position:
+        """同向分批加仓（只允许与持仓同向；由调用方保证语义）。"""
+        raise NotImplementedError
+
+    async def close_position(self, reason: str = "", fill_px: Optional[float] = None,
+                             frac: float = 1.0) -> dict:
+        """平仓：frac=1.0 全平；0<frac<1 部分平仓（剩余仓位继续管理）。"""
         raise NotImplementedError
 
     def equity(self, mark: float) -> float:
@@ -108,6 +213,13 @@ class Broker:
     def buyable_usdt(self) -> float:
         """可买（USDT）：可用资金 × 杠杆，受 max_notional 约束。"""
         return 0.0
+
+    def fraction_eth(self, plan_eth: float, frac: float) -> float:
+        """按计划量切分批仓位：张数取整到 lot、不足最小单量返回 0。
+
+        136 分仓的首笔/补批都从这里出大小，三模式同一口径。
+        """
+        return fraction_eth_for_spec(self.feed.spec, plan_eth, frac)
 
     def snapshot(self, mark: float) -> dict:
         return {
@@ -155,46 +267,63 @@ class PaperBroker(Broker):
         return fills.depth_fill_price(ob, side, size_eth, self.risk.slippage_bps)
 
     async def open_position(self, side: str, size_eth: float) -> Position:
-        spec = self.feed.spec
         fill = await self._fill_price(side, size_eth)
-        notional = okx_math.notional(size_eth, fill)
-        fee = notional * self.taker_fee
-        margin = okx_math.margin_required(notional, self.risk.leverage)
-        if margin > self.wallet.balance:
-            logger.warning(f"保证金不足: 需 {margin:.4f} 可用 {self.wallet.balance:.4f}")
+        pos = open_position_math(self.wallet, side, size_eth, fill,
+                                 self.taker_fee, self.risk.leverage,
+                                 self.feed.spec.mmr)
+        if pos is None:
+            logger.warning(f"纸盘开仓保证金不足: {size_eth:.4f} ETH @ {fill:.2f}")
             return self.position
-
-        self.wallet.lock_margin(margin)
-        self.wallet.pay_fee(fee)
-        liq = okx_math.liquidation_price(side, fill, size_eth, margin, spec.mmr, self.taker_fee)
-        self.position = Position(
-            side=side, size_eth=size_eth, entry=fill, margin=margin,
-            liq_px=liq,
-            cost_usdt=okx_math.cost_including_fee(fill, size_eth, self.taker_fee),
-            cost_price=okx_math.cost_price_including_fee(fill, self.taker_fee),
-            fee=fee, open_ts=time.time(),
-        )
         logger.info(f"纸盘开仓 {side} {size_eth:.4f} ETH @ {fill:.2f} "
-                    f"保证金 {margin:.4f} 强平价 {liq:.2f}")
-        return self.position
+                    f"保证金 {pos.margin:.4f} 强平价 {pos.liq_px:.2f}")
+        return pos
 
-    async def close_position(self, reason: str = "", fill_px: Optional[float] = None) -> dict:
+    async def add_position(self, side: str, size_eth: float) -> Position:
+        """分批加仓：同向累加，加权均价，累计保证金与强平价按 OKX 口径。"""
+        pos = self.position
+        if not pos.is_open or side != pos.side or size_eth <= 0:
+            logger.warning(f"加仓条件不符: 当前 {pos.side} {pos.size_eth:.4f}, "
+                           f"请求 {side} {size_eth:.4f}")
+            return pos
+        fill = await self._fill_price(side, size_eth)
+        merged = add_position_math(self.wallet, pos, size_eth, fill,
+                                   self.taker_fee, self.risk.leverage,
+                                   self.feed.spec.mmr)
+        if merged is None:
+            logger.warning(f"纸盘加仓保证金不足: {size_eth:.4f} ETH @ {fill:.2f}")
+            return pos
+        logger.info(f"纸盘加仓 {side} +{size_eth:.4f} ETH @ {fill:.2f} "
+                    f"-> 总 {merged.size_eth:.4f} ETH 均价 {merged.entry:.2f} "
+                    f"强平价 {merged.liq_px:.2f}")
+        return merged
+
+    async def close_position(self, reason: str = "", fill_px: Optional[float] = None,
+                             frac: float = 1.0) -> dict:
         pos = self.position
         if not pos.is_open:
             return {}
-        px = fill_px if fill_px is not None else await self._fill_price(
-            "sell" if pos.side == "long" else "buy", pos.size_eth)
-        pnl = okx_math.unrealized_pnl(pos.side, pos.entry, px, pos.size_eth)
-        fee = okx_math.notional(pos.size_eth, px) * self.taker_fee
-        self.wallet.unlock_margin(pos.margin)
-        self.wallet.pay_fee(fee)
-        self.wallet.add_pnl(pnl)
-        self._record_trade(pos.side, pos.size_eth, pos.entry, px, pnl, fee, 0.0, reason)
-        logger.info(f"纸盘平仓 {pos.side} {pos.size_eth:.4f} ETH @ {px:.2f} "
-                    f"盈亏 {pnl:+.4f} 原因: {reason or '手动'}")
-        result = {"side": pos.side, "size_eth": pos.size_eth, "entry": pos.entry,
-                  "exit": px, "pnl": pnl, "fee": fee, "reason": reason}
-        self.position = Position()
+        if frac <= 0 or frac >= 1.0:
+            # 全平走原路径（可用 fill_px 覆盖成交价，如止损/强平价）
+            frac = 1.0
+            px = fill_px if fill_px is not None else await self._fill_price(
+                "sell" if pos.side == "long" else "buy", pos.size_eth)
+        else:
+            px = fill_px if fill_px is not None else await self._fill_price(
+                "sell" if pos.side == "long" else "buy", pos.size_eth * frac)
+        rec, rest = close_position_math(self.wallet, pos, px, self.taker_fee,
+                                        self.feed.spec.mmr, frac=frac, reason=reason)
+        if rec:
+            self._record_trade(pos.side, rec["size_eth"], rec["entry"], px,
+                               rec["pnl"], rec["fee"], 0.0, reason)
+        self.position = rest
+        verb = "纸盘平仓" if frac >= 1.0 else f"纸盘部分平仓 {frac * 100:.0f}%"
+        logger.info(f"{verb} {pos.side} {rec.get('size_eth', 0):.4f} ETH @ {px:.2f} "
+                    f"盈亏 {rec.get('pnl', 0):+.4f} 原因: {reason or '手动'}"
+                    + (f" 剩余 {rest.size_eth:.4f} ETH" if rest.is_open else ""))
+        result = {"side": pos.side, "size_eth": rec.get("size_eth", 0.0),
+                  "entry": rec.get("entry", pos.entry), "exit": px,
+                  "pnl": rec.get("pnl", 0.0), "fee": rec.get("fee", 0.0),
+                  "reason": reason, "frac": frac, "remaining": rest.is_open}
         return result
 
     async def check_liquidation(self, mark: float) -> Optional[dict]:
@@ -256,19 +385,32 @@ class LiveBroker(Broker):
         await self.refresh_position()
         return self.position
 
-    async def close_position(self, reason: str = "", fill_px: Optional[float] = None) -> dict:
+    async def add_position(self, side: str, size_eth: float) -> Position:
+        """实盘加仓 = 同向市价单，总量/均价由交易所合并后 refresh 对账。"""
+        return await self.open_position(side, size_eth)
+
+    async def close_position(self, reason: str = "", fill_px: Optional[float] = None,
+                             frac: float = 1.0) -> dict:
         pos = self.position
         if not pos.is_open:
             return {}
+        size = pos.size_eth if frac >= 1.0 else pos.size_eth * frac
         contracts = okx_math.round_to_lot(
-            okx_math.eth_to_contracts(pos.size_eth, self.feed.spec.ct_val), self.feed.spec.lot_sz)
+            okx_math.eth_to_contracts(size, self.feed.spec.ct_val), self.feed.spec.lot_sz)
+        if contracts <= 0:
+            logger.warning(f"部分平仓量不足 1 张，跳过: frac={frac} size={size:.6f}")
+            return {}
         side = "sell" if pos.side == "long" else "buy"
         order = await self.exchange.create_order(self.cfg.symbol, "market", side, contracts,
                                                  params={"reduceOnly": True})
-        logger.info(f"实盘平仓 {contracts} 张 order={order.get('id')} 原因: {reason or '手动'}")
+        logger.info(f"实盘{'部分' if frac < 1.0 else ''}平仓 {contracts} 张 "
+                    f"order={order.get('id')} 原因: {reason or '手动'}")
         await self.refresh_position()
-        self._record_trade(pos.side, pos.size_eth, pos.entry, self.feed.price, 0.0, 0.0, 0.0, reason)
-        return {"side": pos.side, "reason": reason}
+        if frac >= 1.0:
+            self._record_trade(pos.side, pos.size_eth, pos.entry, self.feed.price,
+                               0.0, 0.0, 0.0, reason)
+        return {"side": pos.side, "reason": reason, "frac": frac,
+                "remaining": self.position.is_open}
 
     async def refresh_position(self) -> None:
         """以交易所数据为准刷新持仓与资金。"""

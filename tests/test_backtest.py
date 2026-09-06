@@ -125,3 +125,96 @@ def test_backtest_keeps_same_strategy_code():
     assert isinstance(Backtest(cfg2, synth_bars([3000.0] * 100), []).strategy, TrendEma)
     cfg3 = make_cfg(challenge={"initial_balance": 20.0}, strategy={"name": "donchian"})
     assert isinstance(Backtest(cfg3, synth_bars([3000.0] * 100), []).strategy, DonchianBreakout)
+
+
+# ---------- 136 分批与部分平仓的账本测试（fake 策略驱动回测） ----------
+
+from app.strategy import Signal, Strategy  # noqa: E402
+
+
+class _LegsStrat(Strategy):
+    """按固定 bar 序发信号：开首层(10%) -> 补 30% -> 补 60% -> 全平。"""
+
+    name = "_legs"
+
+    def on_bar(self, bar, ctx):
+        n = len(ctx.history)
+        if not ctx.position.is_open:
+            if n == 10:
+                self.sl_px = 95.0
+                return Signal("open_long", "test L1", frac=0.1)
+        else:
+            if n == 26:
+                return Signal("add_long", "test L2", frac=0.3)
+            if n == 42:
+                return Signal("add_long", "test L3", frac=0.6)
+            if n == 60:
+                return Signal("close", "test 全平")
+        return Signal("none")
+
+
+def test_backtest_legs_accounting_136():
+    """三批 10/30/60 累加：加权均价、累计保证金、全平后账本守恒。
+
+    价格恒 100、杠杆 5x、margin_per_trade=5 -> 计划名义 25U = 0.25 ETH，
+    分批尺寸 = 计划 × 0.1/0.3/0.6（取整到 0.01 张后仍为 0.025/0.075/0.15）。
+    """
+    bars = synth_bars(flat_series(100, 100.0))
+    cfg = make_cfg(challenge={"initial_balance": 20.0})
+    bt = Backtest(cfg, bars, [])
+    bt.strategy = _LegsStrat({})
+    bt.run()
+
+    assert len(bt.trades) == 1                     # 只有全平一条记录
+    rec = bt.trades[0]
+    assert rec["reason"] == "test 全平"
+    assert rec["size_eth"] == pytest.approx(0.25, rel=1e-6)
+    assert rec["side"] == "long"
+    # 账本守恒：全平后无锁定保证金，余额 = 初始 + 已实现(含买卖滑点) - 总手续费
+    assert bt.wallet.margin_locked == 0
+    assert bt.wallet.balance == pytest.approx(
+        20.0 + bt.wallet.realized_pnl - bt.wallet.fees_paid, abs=1e-9)
+    assert bt.wallet.balance > 0
+    assert bt._plan_eth == 0.0
+
+
+class _PartialStrat(Strategy):
+    """开 10% 首层 + 挂 110 的目标位部分止盈(50%)；其余交给 end_of_data。"""
+
+    name = "_partial"
+
+    def on_bar(self, bar, ctx):
+        n = len(ctx.history)
+        if not ctx.position.is_open:
+            if n == 10:
+                self.sl_px = 98.0
+                self.partial_exits = [{"px": 110.0, "frac": 0.5,
+                                       "reason": "目标位部分止盈"}]
+                return Signal("open_long", "test L1", frac=0.1)
+        return Signal("none")
+
+
+def test_backtest_partial_close_accounting():
+    """触及目标位 -> 部分平仓 50%（按比例解锁保证金/记账），剩余仓位继续。"""
+    bars = synth_bars(uptrend(220, 100.0, 0.5))    # 涨到 ~209，必然穿过 110
+    cfg = make_cfg(challenge={"initial_balance": 20.0})
+    bt = Backtest(cfg, bars, [])
+    bt.strategy = _PartialStrat({})
+    bt.run()
+
+    assert len(bt.trades) == 1
+    rec = bt.trades[0]
+    assert rec["reason"] == "目标位部分止盈"
+    assert rec["exit"] == pytest.approx(110.0)     # 事件价精确成交
+    assert rec["pnl"] > 0
+    # 半仓离场：剩余仓位与已平记录各占一半；剩余保证金按同口径重算（margin=名义/杠杆）
+    assert bt.position.is_open
+    assert bt.position.size_eth == pytest.approx(rec["size_eth"], rel=1e-9)
+    assert bt.position.margin == pytest.approx(
+        bt.position.size_eth * bt.position.entry / 5.0, rel=1e-9)
+    assert bt._plan_eth > 0                        # 部分平仓不清除分批计划
+    # 守恒：balance + margin_locked + UPL = 初始 - 已付费用 + 已实现 + UPL
+    upl = bt.position.unrealized(bars[-1]["c"])
+    equity = bt.wallet.balance + bt.wallet.margin_locked + upl
+    assert equity == pytest.approx(
+        20.0 - bt.wallet.fees_paid + bt.wallet.realized_pnl + upl, abs=1e-9)

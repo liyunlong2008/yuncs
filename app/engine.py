@@ -59,8 +59,10 @@ class Engine:
         self.round_no: int = 0
 
         self._bars: list[dict] = []
-        self._history_limit = 500
+        # 窗口需覆盖策略最高周期指标预热：1H MA60 需 ≥240 根 15m + 摆动窗/止损余量
+        self._history_limit = 1500
         self._warmed = False
+        self._plan_eth = 0.0  # 分批计划全仓目标（首笔开仓锁定，平尽后清零）
         self._next_funding_ts: Optional[float] = None
         self._last_sample_ts = 0.0
         self._last_refresh_ts = 0.0
@@ -104,7 +106,8 @@ class Engine:
             self.mode, self.strategy.name, initial, self.cfg.model_dump(exclude={"secrets"}),
         )
         if not self._warmed:
-            warmup = await self.feed.fetch_ohlcv_history(self.cfg.challenge.timeframe, limit=200)
+            warmup = await self.feed.fetch_ohlcv_history(
+                self.cfg.challenge.timeframe, limit=self._history_limit)
             self._bars = warmup
             self._warmed = True
             self._next_funding_ts = okx_math.next_funding_time(
@@ -133,7 +136,7 @@ class Engine:
         if status == Status.STOPPED:
             if self.broker.position.is_open:
                 try:
-                    await self.broker.close_position(reason="manual_stop")
+                    await self._do_close(reason="manual_stop")
                 except Exception as e:
                     logger.warning(f"停止平仓失败: {e}")
             await self._flush_trades()
@@ -147,7 +150,7 @@ class Engine:
         # 平仓（动态线触发或超时）
         if self.broker.position.is_open:
             try:
-                await self.broker.close_position(reason="round_end")
+                await self._do_close(reason="round_end")
             except Exception as e:
                 logger.warning(f"轮次平仓失败: {e}")
         await self._flush_trades()
@@ -236,34 +239,79 @@ class Engine:
 
         pos = self.broker.position
         if pos.is_open:
-            hit = self.strategy.check_tp_sl(bar, pos.side)
+            hit = self.strategy.evaluate_exits(bar, pos.side)
             if hit:
-                await self.broker.close_position(reason=hit[1], fill_px=hit[0])
-                self.strategy.on_open()
+                await self._do_close(reason=hit[1], fill_px=hit[0], frac=hit[2])
+                if not self.broker.position.is_open:
+                    self.strategy.on_open()
 
         sig = self.strategy.on_bar(bar, self._ctx())
         if sig.action in ("open_long", "open_short"):
-            await self._try_open("long" if sig.action == "open_long" else "short", sig.reason)
+            await self._try_open("long" if sig.action == "open_long" else "short",
+                                 sig.reason, sig.frac)
+        elif sig.action in ("add_long", "add_short"):
+            await self._try_add("long" if sig.action == "add_long" else "short",
+                                sig.reason, sig.frac)
         elif sig.action == "close":
-            await self.broker.close_position(reason=sig.reason)
+            await self._do_close(reason=sig.reason)
             self.strategy.on_open()
+        self._sync_plan_state()
 
         await self._flush_trades()
         if self.challenge.status != Status.RUNNING:
             return
         await self._post_state(bar["c"])
 
-    async def _try_open(self, side: str, reason: str) -> None:
-        if self.broker.position.is_open or self.challenge.status != Status.RUNNING:
+    async def _do_close(self, reason: str, fill_px: Optional[float] = None,
+                        frac: float = 1.0) -> dict:
+        """统一平仓入口：平尽后清分批计划（部分平仓保留计划与策略状态）。"""
+        res = await self.broker.close_position(reason=reason, fill_px=fill_px, frac=frac)
+        self._sync_plan_state()
+        return res
+
+    def _sync_plan_state(self) -> None:
+        """持仓平尽 -> 丢弃分批计划；部分平仓/加仓不影响。"""
+        if not self.broker.position.is_open:
+            self._plan_eth = 0.0
+
+    async def _try_open(self, side: str, reason: str, frac: float = 1.0) -> None:
+        if self.challenge.status != Status.RUNNING:
             return
         mark = self.feed.price or self.last_mark
         if mark <= 0:
             return
-        contracts, size_eth = self.broker.compute_size(mark)
-        if contracts <= 0:
+        if not self.broker.position.is_open:
+            contracts, plan = self.broker.compute_size(mark)
+            if contracts <= 0:
+                return
+            size = plan if frac >= 1.0 else self.broker.fraction_eth(plan, frac)
+            if size <= 0:
+                logger.warning(f"首笔仓位过小(frac={frac})，跳过开仓")
+                return
+            await self.broker.open_position(side, size)
+            self._plan_eth = plan
+            logger.info(f"信号[{reason}] 开仓 {side} {size:.4f} ETH @ {mark:.2f} "
+                        f"计划 {plan:.4f} ETH (frac={frac:.0%})")
+
+    async def _try_add(self, side: str, reason: str, frac: float = 1.0) -> None:
+        """同向补批（136）：只允许与当前持仓同向，尺寸按锁定计划切。"""
+        if self.challenge.status != Status.RUNNING:
             return
-        await self.broker.open_position(side, size_eth)
-        logger.info(f"信号[{reason}] 开仓 {side} {size_eth:.4f} ETH @ {mark:.2f}")
+        pos = self.broker.position
+        if not pos.is_open or side != pos.side or self._plan_eth <= 0:
+            logger.warning(f"补批条件不符: 持仓 {pos.side} 计划 {self._plan_eth:.4f} "
+                           f"请求 {side} frac={frac}")
+            return
+        mark = self.feed.price or self.last_mark
+        if mark <= 0:
+            return
+        size = self.broker.fraction_eth(self._plan_eth, frac)
+        if size <= 0:
+            logger.warning(f"补批量过小(frac={frac})，跳过")
+            return
+        await self.broker.add_position(side, size)
+        logger.info(f"信号[{reason}] 补批 {side} +{size:.4f} ETH @ {mark:.2f} "
+                    f"-> 总 {pos.size_eth + size:.4f} ETH")
 
     def _ctx(self) -> Ctx:
         return Ctx(

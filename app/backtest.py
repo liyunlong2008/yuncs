@@ -12,7 +12,13 @@ from __future__ import annotations
 from typing import Optional
 
 from . import fills, okx_math
-from .broker import Position
+from .broker import (
+    Position,
+    add_position_math,
+    close_position_math,
+    fraction_eth_for_spec,
+    open_position_math,
+)
 from .challenge import Challenge, ChallengeConfig, Status
 from .config import Config
 from .okx_feed import InstrumentSpec
@@ -53,6 +59,7 @@ class Backtest:
         self._funding_idx = 0
         self._next_funding_ts: Optional[float] = None
         self._max_equity_seen = initial
+        self._plan_eth = 0.0  # 分批计划全仓目标（首笔开仓时锁定）
 
     def run(self) -> dict:
         if not self.bars:
@@ -63,15 +70,20 @@ class Backtest:
         pending: Optional[Signal] = None
         for i, bar in enumerate(self.bars):
             ts = bar["ts"]
-            # 1) 上一根信号的执行（本根开盘成交）
+            # 1) 上一根信号的执行（本根开盘成交；close 为策略主动平仓信号）
             if pending is not None:
-                self._execute_signal(pending, bar)
+                if pending.action == "close" and self.position.is_open:
+                    side = "sell" if self.position.side == "long" else "buy"
+                    px = fills.candle_fill_price(bar, side, self.cfg.risk.slippage_bps)
+                    self._close(fill_px=px, reason=pending.reason or "策略平仓")
+                else:
+                    self._execute_signal(pending, bar)
                 pending = None
-            # 2) 止盈/止损（本根高低点）
+            # 2) 止盈/止损/部分止盈（本根高低点；按策略返回的 frac 平仓）
             if self.position.is_open:
-                hit = self.strategy.check_tp_sl(bar, self.position.side)
+                hit = self.strategy.evaluate_exits(bar, self.position.side)
                 if hit:
-                    self._close(fill_px=hit[0], reason=hit[1])
+                    self._close(fill_px=hit[0], reason=hit[1], frac=hit[2])
             # 3) 强平保护（带缓冲，提前于 OKX 强平价）
             if self.position.is_open:
                 stop = okx_math.buffered_liq_price(
@@ -105,6 +117,9 @@ class Backtest:
             sig = self.strategy.on_bar(bar, _BarsCtx(self.bars[: i + 1], self.position, bar["c"]))
             if sig.action in ("open_long", "open_short") and not self.position.is_open:
                 pending = sig
+            elif sig.action in ("add_long", "add_short") and self.position.is_open and \
+                    self.position.side == ("long" if sig.action == "add_long" else "short"):
+                pending = sig
             elif sig.action == "close" and self.position.is_open:
                 pending = sig
 
@@ -133,6 +148,7 @@ class Backtest:
         self._round_no += 1
         self.strategy.on_open()
         self.position = Position()
+        self._plan_eth = 0.0
         if self.compounding:
             # 实盘语义：不重置钱包，下一周期从当前余额起算（连续复利）
             initial = self.wallet.equity(0.0)
@@ -144,11 +160,16 @@ class Backtest:
         self.challenge.start_round(initial)
         self.challenge.start_ts = bar["ts"] / 1000.0
 
-    # ---------- 内部撮合（与纸盘同一套口径） ----------
+    # ---------- 内部撮合（与纸盘同一套记账核心，见 broker.py） ----------
     def _execute_signal(self, sig: Signal, bar: dict) -> None:
-        if self.position.is_open or sig.action not in ("open_long", "open_short"):
+        if sig.action in ("open_long", "open_short"):
+            self._open_leg("long" if sig.action == "open_long" else "short", sig, bar)
+        elif sig.action in ("add_long", "add_short"):
+            self._add_signal("long" if sig.action == "add_long" else "short", sig, bar)
+
+    def _open_leg(self, side: str, sig: Signal, bar: dict) -> None:
+        if self.position.is_open:
             return
-        side = "long" if sig.action == "open_long" else "short"
         # 保证金预算：缩放模式按当前可用余额比例；否则固定 margin_per_trade（受余额限制）
         if self.margin_frac > 0:
             margin_budget = self.wallet.balance * self.margin_frac
@@ -160,41 +181,58 @@ class Backtest:
         contracts, size_eth = self._size(bar["o"], notional_cap)
         if contracts <= 0:
             return
+        # 首笔按计划切分批比例（136：第一层 10%）；旧策略 frac=1.0 即全额开仓
+        plan = size_eth
+        if sig.frac < 1.0:
+            size_eth = fraction_eth_for_spec(self.spec, plan, sig.frac)
+            if size_eth <= 0:
+                return
         fill = fills.candle_fill_price(bar, "buy" if side == "long" else "sell",
                                        self.cfg.risk.slippage_bps)
-        notional = okx_math.notional(size_eth, fill)
-        fee = notional * self.cfg.exchange.taker_fee
-        margin = okx_math.margin_required(notional, self.cfg.risk.leverage)
-        if margin > self.wallet.balance:
+        fee_rate = self.cfg.exchange.taker_fee
+        pos = open_position_math(self.wallet, side, size_eth, fill, fee_rate,
+                                 self.cfg.risk.leverage, self.spec.mmr,
+                                 now_ts=bar["ts"] / 1000.0)
+        if pos is None:
             return
-        self.wallet.lock_margin(margin)
-        self.wallet.pay_fee(fee)
-        liq = okx_math.liquidation_price(side, fill, size_eth, margin,
-                                         self.spec.mmr, self.cfg.exchange.taker_fee)
-        self.position = Position(
-            side=side, size_eth=size_eth, entry=fill, margin=margin, liq_px=liq,
-            cost_usdt=okx_math.cost_including_fee(fill, size_eth, self.cfg.exchange.taker_fee),
-            cost_price=okx_math.cost_price_including_fee(fill, self.cfg.exchange.taker_fee),
-            fee=fee, open_ts=bar["ts"] / 1000.0,
-        )
+        self.position = pos
+        self._plan_eth = plan  # 分批计划：首笔按当时预算锁定的全仓目标
 
-    def _close(self, fill_px: float, reason: str) -> None:
+    def _add_signal(self, side: str, sig: Signal, bar: dict) -> None:
+        """同向补批：只允许与持仓同向，尺寸按锁定计划切。"""
+        if not self.position.is_open or self.position.side != side or self._plan_eth <= 0:
+            return
+        size_eth = fraction_eth_for_spec(self.spec, self._plan_eth, sig.frac)
+        if size_eth <= 0:
+            return
+        fill = fills.candle_fill_price(bar, "buy" if side == "long" else "sell",
+                                       self.cfg.risk.slippage_bps)
+        self._add_leg(size_eth, fill)
+
+    def _add_leg(self, size_eth: float, fill: float) -> None:
+        """同向补批（回测与纸盘同一套累加记账）。"""
+        if not self.position.is_open or size_eth <= 0:
+            return
+        fee_rate = self.cfg.exchange.taker_fee
+        merged = add_position_math(self.wallet, self.position, size_eth, fill,
+                                   fee_rate, self.cfg.risk.leverage, self.spec.mmr)
+        if merged is None:
+            return
+        self.position = merged
+
+    def _close(self, fill_px: float, reason: str, frac: float = 1.0) -> None:
         pos = self.position
         if not pos.is_open:
             return
-        fee_rate = self.cfg.exchange.taker_fee
-        pnl = okx_math.unrealized_pnl(pos.side, pos.entry, fill_px, pos.size_eth)
-        fee = okx_math.notional(pos.size_eth, fill_px) * fee_rate
-        self.wallet.unlock_margin(pos.margin)
-        self.wallet.pay_fee(fee)
-        self.wallet.add_pnl(pnl)
-        self.trades.append({
-            "ts": pos.open_ts, "side": pos.side, "size_eth": pos.size_eth,
-            "entry": pos.entry, "exit": fill_px, "pnl": pnl,
-            "fee": fee + pos.fee, "funding": 0.0, "reason": reason,
-        })
-        self.position = Position()
-        self.strategy.on_open()
+        rec, rest = close_position_math(self.wallet, pos, fill_px,
+                                        self.cfg.exchange.taker_fee, self.spec.mmr,
+                                        frac=frac, reason=reason)
+        if rec:
+            self.trades.append(rec)
+        self.position = rest
+        if not rest.is_open:
+            self._plan_eth = 0.0
+            self.strategy.on_open()
 
     def _settle_funding(self, mark: float) -> None:
         rate = 0.0

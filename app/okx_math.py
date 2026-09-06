@@ -101,3 +101,34 @@ def next_funding_time(dt: datetime) -> datetime:
         if dt.hour < h:
             return dt.replace(hour=h, minute=0, second=0, microsecond=0)
     return (dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1))
+
+
+def aggregate_closed(bars: list[dict], bucket_ms: int) -> list[dict]:
+    """把同一源周期的已收盘 K 线聚合到更高周期（UTC 桶对齐）。
+
+    桶起点 = ts - ts % bucket_ms；仅当桶起点 + bucket_ms <= 最后一根 bar 的起点
+    才认定该桶收满（更高周期开新桶 = 上一桶结束，与"行情源只给已收盘 bar"的纪律一致，
+    进行中的桶一律丢弃，禁止把未走完的桶算进指标）。
+    入参须为升序、同一源周期；返回升序的 OHLCV 桶列表。
+    """
+    if not bars or bucket_ms <= 0:
+        return []
+    out: list[dict] = []
+    cur: Optional[dict] = None
+    for b in bars:
+        key = b["ts"] - b["ts"] % bucket_ms
+        if cur is None or key != cur["ts"]:
+            # 出现新桶 = 上一桶已被后续 bar "顶出"，必然收满
+            if cur is not None:
+                out.append(cur)
+            cur = {"ts": key, "o": b["o"], "h": b["h"], "l": b["l"],
+                   "c": b["c"], "v": b["v"]}
+        else:
+            if b["h"] > cur["h"]:
+                cur["h"] = b["h"]
+            if b["l"] < cur["l"]:
+                cur["l"] = b["l"]
+            cur["c"] = b["c"]
+            cur["v"] += b["v"]
+    # 尾桶（含最后一根 bar 的桶）在本函数可见数据内永远未收满，不输出
+    return out
