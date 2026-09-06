@@ -41,7 +41,7 @@ class RiskConfig(BaseModel):
 
 
 class StrategyConfig(BaseModel):
-    name: str = "rsi_revert"  # 研究结论：RSI(2)均值回归+SMA200 趋势过滤（跨窗口唯一全正）
+    name: str = "rsi_revert"  # 默认策略（2026-09-06 复核：20U 口径下全候选未过 1.0 红线，见 README 补充研究）
     params: dict = Field(default_factory=dict)
 
 

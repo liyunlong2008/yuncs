@@ -58,6 +58,13 @@ store / api / static      持久化 / FastAPI / 看板
 - **同一套策略代码跑 回测/纸盘/实盘**（`strategy.py`），挑战引擎三模式共用（`challenge.py`）——新策略只加类、新规则只改 engine，不许复制逻辑到各模式
 - 依赖单向：engine/backtest → strategy/challenge/broker → okx_math/fills/wallet → okx_feed
 - 行情源：WS 优先，REST 降级；策略是 bar 驱动（1m 默认），不要改成 tick 级实时框架
+- **分批(136)/部分平仓是仓位语义的一部分**：开/加/平会计全部在 `broker.py` 共享同步核心
+  （open/add/close_position_math），纸盘与回测只调它，禁止各自再写一套；部分平仓按比例解锁保证金、
+  记录 realized trade，剩余仓位按累计口径重算强平价；实盘分批/部分平仓一律以交易所对账为准（LiveBroker
+  不自行记账）；部分平仓不清除分批计划（`_plan_eth` 平尽才清零）。分批信号/部分止盈事件机见
+  `Signal.frac`、`add_long/add_short` 与 `Strategy.evaluate_exits`（引擎与回测同一调用）
+- 多周期（1H/4H 等）序列一律由基周期已收盘 bar 用 `okx_math.aggregate_closed` 内部聚合（UTC 桶对齐、
+  丢弃进行中桶），禁止另开行情订阅或"去掉最后一根"的凑数写法（多周期=派生数据，与 feed 无关）
 
 ## 6. 工程约定
 
@@ -71,6 +78,14 @@ store / api / static      持久化 / FastAPI / 看板
 - 改动必须跑 `uv run pytest`，全过才算完成；新增/修改 `okx_math`、`challenge`、`fills`、`strategy` 必须同步改单测
 - **回测语义红线：默认/单次回测结论必须用实盘连续语义（`Backtest(compounding=True)`）复核**——纸盘重置语义会掩盖复利损耗（曾致"回测看起来像样、实盘语义 1年/3年 全归零"的判断偏差）。新策略/改参数想宣称"盈利"，必须给 compounding 模式的期末倍数；无法转正一律按"期望为负"对待
 - 关键不变量：强平价公式对照 OKX 官方口径（`test_margin_consistency_at_liquidation`）、容忍率线性无悬崖（`test_tolerance_linear_no_cliff`）、锁利/止损/超时/轮次重置、回测确定性（`test_backtest_deterministic`：相同输入 → 相同输出）
+- 分批/部分平仓不变量（tests/test_backtest.py）：锁定保证金=各批之和且与名义/杠杆线性一致、加权均价、
+  部分平后按累计口径重算强平价、wallet 收支守恒（balance+locked+UPL = 初始 - 费用 + 已实现 + UPL）、
+  部分平仓保留分批计划；ma_macd 行为不变量（tests/test_strategy.py）：二次确认才进首层、放量阻断、
+  摆动击穿失效、止损优先于部分止盈且事件消费一次、保本/追踪只朝有利方向
+- **默认策略切换红线（2026-09-06 复核）**：`ma_macd`（VC 体系机械版）与 `rsi_revert` 在 20U 玩法口径
+  （15m/5x/固定5U与25%缩放，compounding）下均未过 1.0 红线（ma 各变体 0.95~1.00x、rsi 0.015~0.095x），
+  且 ma 3 年仅 33 笔无法与 0 区分——**默认维持 rsi_revert，不得因"看起来比基线好"切换负期望策略**；
+  瓶颈疑在资金层（25% 保证金 + 出局线组合损耗），研究结论表见 README「补充研究」
 - **纸盘验证必须覆盖 WS 与 REST 两种 feed**：曾因 WS 收盘检测 bug，VPS 一天不开仓而本地（REST）回测正常——本地 REST 跑通不算完成，还需在直连 OKX 的环境（VPS）确认 WS 路径正常（判断标准：日志周期性出现"新 K 线"，且该时段回测有信号时能实际开仓）
 - **回测能开仓而实盘/纸盘不开仓 → 第一排查数据管道（K 线是否到达引擎），不是策略**
 - 实盘路径不做自动化测试，靠启动预检 + 纸盘先跑通验证

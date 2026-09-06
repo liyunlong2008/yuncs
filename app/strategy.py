@@ -794,7 +794,7 @@ class MaMacd(Strategy):
         self.h1_max = i("h1_max", 150)
         self.sw_look = i("sw_look", 24)      # 支撑/压力/前高前低 用近 N 根 1H
         self.atr_p = i("atr_p", 14)
-        self.zone_mult = f("zone_mult", 1.0)   # 贴近判定 = atr1h × mult
+        self.zone_mult = f("zone_mult", 2.0)   # 位置带宽度 = atr1h × mult
         self.confirm = str(params.get("confirm", "second"))  # any | second
         self.vol_spike_mult = f("vol_spike_mult", 2.5)       # 0=关闭放量过滤
         self.enable_t1 = params.get("enable_t1", True)
@@ -869,12 +869,17 @@ class MaMacd(Strategy):
 
     # ---------- 1H 结构 ----------
     def _context(self, history: list[dict]):
-        """(h1, closes15, line, atr1, support, resistance)；预热不足返回 None。"""
+        """(h1, closes15, line, atr1, support, resistance)；预热不足返回 None。
+
+        closes15 只需覆盖 15m MACD 预热窗口（slow+sig+2≈37），
+        强制有界尾部，避免每根 bar 全量扫描历史（回测 3 年 10 万根 bar 性能关键）。
+        """
         h1 = h1_closed_tail(history, self.h1_max)
         if len(h1) < self.gate_ma + 3:
             return None
-        closes = [b["c"] for b in history]
-        if len(closes) < self.macd_slow + self.macd_sig + 2:
+        need = self.macd_slow + self.macd_sig + 2
+        closes = [b["c"] for b in history[-need:]]
+        if len(closes) < need:
             return None
         line = calc_sma([b["c"] for b in h1], self.gate_ma)
         atr1 = calc_atr(h1, self.atr_p)
@@ -891,16 +896,22 @@ class MaMacd(Strategy):
 
     def _template(self, c: float, h1last: float, line: float, support: float,
                   resistance: float, zone: float) -> str:
-        """当前 15m 收盘价命中的位置模板（空串 = 不在任何位置，不交易）。"""
+        """当前 15m 收盘价命中的位置模板（空串 = 不在任何位置，不交易）。
+
+        按"距生命线远近 × 方向"做无歧义四分区（帖子四位置的可执行版本）：
+        生命线下方：1.2×zone 内为反抽带(t4 死叉做空)，更深为超跌带(t1 金叉做多)；
+        生命线上方：1.2×zone 内为回踩带(t3 金叉做多)，更高为高位带(t2 死叉做空)。
+        交叉方向与带不匹配时不交易（如 t2 带里的金叉 = 追高，排除）。
+        """
         if h1last < line:
-            if self.enable_t1 and support - zone * 0.6 <= c <= support + zone * 1.2:
+            if self.enable_t1 and c <= line - zone * 1.2:
                 return "t1"
-            if self.enable_t4 and line - zone * 1.2 <= c <= line + zone * 0.5:
+            if self.enable_t4 and line - zone * 1.2 < c <= line + zone * 0.5:
                 return "t4"
         else:
             if self.enable_t3 and line - zone * 0.5 <= c <= line + zone * 1.2:
                 return "t3"
-            if self.enable_t2 and resistance - zone * 1.2 <= c <= resistance + zone * 0.6:
+            if self.enable_t2 and c > line + zone * 1.2:
                 return "t2"
         return ""
 
@@ -957,11 +968,15 @@ class MaMacd(Strategy):
         tpl = self._template(c, h1last, line, support, resistance, zone)
 
         if self.confirm == "second":
-            # 二次确认进场：同向交叉 + 已武装 + 当前仍命中模板
-            if gx and not spike and self._armed == "long" and tpl in ("t1", "t3"):
-                return self._open("long", tpl, bar, line, support, resistance, atr1)
-            if dx and not spike and self._armed == "short" and tpl in ("t2", "t4"):
-                return self._open("short", tpl, bar, line, support, resistance, atr1)
+            # 二次确认进场：同向交叉 + 已武装。位置在"首叉"时定（武装需在模板带内），
+            # 二次交叉允许价格已离开原带（帖子语境=在位置上等第二脚）；
+            # 失效由 摆动击穿/生命线翻侧/超时 过滤，不因离带而过早放弃
+            if gx and not spike and self._armed == "long":
+                epl = tpl if tpl in ("t1", "t3") else ("t3" if h1last >= line else "t1")
+                return self._open("long", epl, bar, line, support, resistance, atr1)
+            if dx and not spike and self._armed == "short":
+                epl = tpl if tpl in ("t2", "t4") else ("t4" if h1last <= line else "t2")
+                return self._open("short", epl, bar, line, support, resistance, atr1)
             # 首次信号 -> 只武装（不重复覆盖既有武装）
             if self._armed is None and gx and not spike and tpl in ("t1", "t3"):
                 self._armed, self._armed_tpl = "long", tpl

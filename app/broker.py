@@ -386,7 +386,15 @@ class LiveBroker(Broker):
         return self.position
 
     async def add_position(self, side: str, size_eth: float) -> Position:
-        """实盘加仓 = 同向市价单，总量/均价由交易所合并后 refresh 对账。"""
+        """实盘加仓 = 同向市价单，总量/均价由交易所合并后 refresh 对账。
+
+        下单前按名义/杠杆估算所需保证金，不足直接跳过（防拒单噪音）。
+        """
+        px = self.feed.price or 0.0
+        need = okx_math.margin_required(okx_math.notional(size_eth, px), self.risk.leverage)
+        if px <= 0 or need > self.available_usdt:
+            logger.warning(f"实盘加仓保证金不足: 需 {need:.4f} 可用 {self.available_usdt:.4f}，跳过")
+            return self.position
         return await self.open_position(side, size_eth)
 
     async def close_position(self, reason: str = "", fill_px: Optional[float] = None,
