@@ -258,11 +258,11 @@ def test_mamacd_breakeven_and_trail_ratchet_then_stop():
 
 # ---------- v2 行为：放量口径 / 背离过滤 / 日线前高受阻 ----------
 
-def test_mamacd_vol_exit_opposite_default_off_opt_in():
-    """持仓中放量反向大 bar：默认不再全平（2026-09 帖子口径：日内放量多为洗盘）；
-    vol_exit_opposite=True 才恢复旧行为。"""
+def test_mamacd_vol_exit_opposite_default_on_opt_out():
+    """持仓中放量反向大 bar：默认全平（回测证据优于关闭，见策略文档串）；
+    vol_exit_opposite=False 可关闭以贴近作者"日内放量是洗盘"的表述。"""
     base = [1000.0] * 700 + [1000.4] + [1000.2] * 12 + [1000.5]
-    for params, expect_close in (({}, False), ({"vol_exit_opposite": True}, True)):
+    for params, expect_close in (({}, True), ({"vol_exit_opposite": False}, False)):
         s = create_strategy("ma_macd", params)
         ev, s = drive(s, base)
         assert ev and ev[0][1] == "open_long"

@@ -780,13 +780,14 @@ class MaMacd(Strategy):
       T3 空中加油多：1H 收盘在生命线上、15m 回踩生命线带 -> 金叉做多（目标前高）
       T4 确认位空：  1H 收盘在生命线下、15m 反抽生命线带 -> 死叉做空（镜像）
     - 首次两情相悦只武装等第二次；二次确认须同向且未击穿首叉摆动极值（confirm=second）
-    - 放量过滤（入场错开沿用帖子"放量观望"）；**持仓中的反向放量不再自动全平**
-      （2026-09-06 帖子口径修正：日内放量多为洗盘诱惑，勿被搞破防；保留
-      vol_exit_opposite=True 可选开启旧行为）
+    - 放量过滤（入场错开沿用帖子"放量观望"）；持仓反向放量全平默认开（vol_exit_opposite），
+      依据 2026-09-06 回测证据（作者"日内放量是洗盘"需人工判别，机械版止盈式离场更优）；
+      设 False 可关闭以贴近作者最新表述
     - div_filter=True 时：四位置入场前要求同方向 MACD 背离（B站教学模块：
-      底背离的底部反弹 / 顶背离的高位回调）
+      底背离的底部反弹 / 顶背离的高位回调）——**回测证据：15m 级别会把信号全部滤光
+      （3年 0 笔），默认关**；若要用需换 1H 级别背离另行研究
     - d1_enable=True 时：日线形态离场（帖子："多次试探前高不破+日线新高针 -> 多单都走，
-      布局回调空"）——激活后只允许空头模板，直到日线收盘突破该前高或超时解除
+      布局回调空"）——v1 判定在 3y/近1y 无增益（触发放置次数极少），默认关，参数可调后另行验证
     - 136：首层 leg1(10%) 进场；持仓中再现金叉/死叉补 leg2(30%)；
       向有利方向延伸 ≥ l3_atr×ATR 补 leg3(60%)；条件不满足则放弃后续批次
     - 离场：初始 ATR 止损 -> 浮盈≥be_atr×ATR 移保本 -> chandelier 追踪；
@@ -811,7 +812,10 @@ class MaMacd(Strategy):
         self.zone_mult = f("zone_mult", 2.0)   # 位置带宽度 = atr1h × mult
         self.confirm = str(params.get("confirm", "second"))  # any | second
         self.vol_spike_mult = f("vol_spike_mult", 2.5)       # 0=关闭放量过滤
-        self.vol_exit_opposite = params.get("vol_exit_opposite", False)  # 持仓反向放量全平(旧口径)
+        # 持仓反向放量全平：默认开。作者 2026-09 帖称"日内放量是洗盘诱惑"，
+        # 但 3y/近1y 回测证据表明机械止盈式离场更优(0.998/0.997 vs 0.976/0.995)——
+        # 作者依赖人工区分洗盘与真转势，机械版无法区分，按数据保留止盈式离场
+        self.vol_exit_opposite = params.get("vol_exit_opposite", True)
         self.enable_t1 = params.get("enable_t1", True)
         self.enable_t2 = params.get("enable_t2", True)
         self.enable_t3 = params.get("enable_t3", True)
