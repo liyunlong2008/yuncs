@@ -751,6 +751,7 @@ class HybridRangeTrend(Strategy):
 
 # ---------- ma_macd：MA+MACD 两情相悦 × 1H 生命线（VC_kxs 体系机械版） ----------
 H1_MS = 3_600_000
+D1_MS = 86_400_000
 
 
 def h1_closed_tail(history15: list[dict], max_h1: int = 150) -> list[dict]:
@@ -760,19 +761,32 @@ def h1_closed_tail(history15: list[dict], max_h1: int = 150) -> list[dict]:
     return okx_math.aggregate_closed(tail, H1_MS)[-max_h1:]
 
 
+def d1_closed_tail(history15: list[dict], max_d1: int = 12) -> list[dict]:
+    """从 15m 已收盘历史尾部聚合出最多 max_d1 个已收盘日线桶。"""
+    need = max_d1 * 96 + 8
+    tail = history15[-need:] if len(history15) > need else history15
+    return okx_math.aggregate_closed(tail, D1_MS)[-max_d1:]
+
+
 class MaMacd(Strategy):
     """MA+MACD 双确认 × 1H 生命线 × 四位置 × 136 分仓 × 锁利离场（机械版）。
 
-    帖子规则 -> 代码映射（可回测解读，v1，参数可调）：
-    - 周期栈：15m 已收盘 bar 决策；1H 由 15m 内部聚合（h1_closed_tail）
+    帖子规则 -> 代码映射（可回测解读，v2，参数可调）：
+    - 周期栈：15m 已收盘 bar 决策；1H/日线 由 15m 内部聚合（h1/d1_closed_tail）
     - 两情相悦 = 同根 15m bar：MA快上穿MA慢 且 MACD DIF 上穿 DEA（做多；死叉镜像）
     - 四位置模板（enable_t1..t4 可关）：
-      T1 底部反弹多：1H 收盘在生命线下、贴近摆动低点 -> 金叉做多（目标回生命线）
-      T2 高位回调空：1H 收盘在生命线上、贴近摆动高点 -> 死叉做空（镜像）
-      T3 空中加油多：1H 收盘在生命线上、15m 回踩生命线附近 -> 金叉做多（目标前高）
-      T4 确认位空：  1H 收盘在生命线下、15m 反抽生命线附近 -> 死叉做空（镜像）
+      T1 底部反弹多：1H 收盘在生命线下、超跌带 -> 金叉做多（目标回生命线）
+      T2 高位回调空：1H 收盘在生命线上、高位带 -> 死叉做空（镜像）
+      T3 空中加油多：1H 收盘在生命线上、15m 回踩生命线带 -> 金叉做多（目标前高）
+      T4 确认位空：  1H 收盘在生命线下、15m 反抽生命线带 -> 死叉做空（镜像）
     - 首次两情相悦只武装等第二次；二次确认须同向且未击穿首叉摆动极值（confirm=second）
-    - 放量跳过；持仓遇放量反向大 bar 直接全平
+    - 放量过滤（入场错开沿用帖子"放量观望"）；**持仓中的反向放量不再自动全平**
+      （2026-09-06 帖子口径修正：日内放量多为洗盘诱惑，勿被搞破防；保留
+      vol_exit_opposite=True 可选开启旧行为）
+    - div_filter=True 时：四位置入场前要求同方向 MACD 背离（B站教学模块：
+      底背离的底部反弹 / 顶背离的高位回调）
+    - d1_enable=True 时：日线形态离场（帖子："多次试探前高不破+日线新高针 -> 多单都走，
+      布局回调空"）——激活后只允许空头模板，直到日线收盘突破该前高或超时解除
     - 136：首层 leg1(10%) 进场；持仓中再现金叉/死叉补 leg2(30%)；
       向有利方向延伸 ≥ l3_atr×ATR 补 leg3(60%)；条件不满足则放弃后续批次
     - 离场：初始 ATR 止损 -> 浮盈≥be_atr×ATR 移保本 -> chandelier 追踪；
@@ -797,10 +811,22 @@ class MaMacd(Strategy):
         self.zone_mult = f("zone_mult", 2.0)   # 位置带宽度 = atr1h × mult
         self.confirm = str(params.get("confirm", "second"))  # any | second
         self.vol_spike_mult = f("vol_spike_mult", 2.5)       # 0=关闭放量过滤
+        self.vol_exit_opposite = params.get("vol_exit_opposite", False)  # 持仓反向放量全平(旧口径)
         self.enable_t1 = params.get("enable_t1", True)
         self.enable_t2 = params.get("enable_t2", True)
         self.enable_t3 = params.get("enable_t3", True)
         self.enable_t4 = params.get("enable_t4", True)
+        # B站背离模块：入场前要求同向 MACD 背离（div_filter=True 开启）
+        self.div_filter = params.get("div_filter", False)
+        self.div_swing = i("div_swing", 3)      # 摆动点回看窗口（±N 根）
+        self.div_win = i("div_win", 260)        # 背离扫描窗口（15m 根）
+        # 日线形态（帖子：前高多次试探不破/新高针 -> 多单离场，布局回调空）
+        self.d1_enable = params.get("d1_enable", False)
+        self.d1_swing_days = i("d1_swing_days", 10)  # 近期日线高点的回看天数
+        self.d1_tests = i("d1_tests", 2)             # 试探前高次数下限
+        self.d1_tol_pct = f("d1_tol_pct", 0.002)     # "触及前高"容差（相对 X 的比例）
+        self.d1_pin_mult = f("d1_pin_mult", 2.0)     # 新高针：上影 >= mult×实体
+        self.d1_guard_days = i("d1_guard_days", 3)   # 空头布局态最长持续天数
         self.leg1 = f("leg1_pct", 0.10)
         self.leg2 = f("leg2_pct", 0.30)
         self.leg3 = f("leg3_pct", 0.60)
@@ -812,6 +838,7 @@ class MaMacd(Strategy):
         self.armed_max_bars = i("armed_max_bars", 96)   # 武装存活上限（1天15m）
         self.armed_look = i("armed_look", 12)           # 武装水印回看（首推动摆动极值）
         self._reset_state()
+        self._d1_guard: Optional[dict] = None           # 日线守卫跨持仓保持
 
     # ---- 持仓/等待期状态（on_open 复位） ----
     def _reset_state(self) -> None:
@@ -828,6 +855,80 @@ class MaMacd(Strategy):
     def on_open(self) -> None:
         super().on_open()
         self._reset_state()
+
+    # ---------- B站背离模块（四位置入场过滤） ----------
+    def _divergence(self, closes: list[float], side: str) -> bool:
+        """MACD DIF 背离：价格创新低/新高而 DIF 反向（底背离做多/顶背离做空）。
+
+        只在最近 div_win 根 15m 上找最近两个摆动极值（±div_swing 窗口），
+        数据不足或形状不满足返回 False（中性，不构成拦截）。
+        """
+        n = min(len(closes), self.div_win)
+        if n < self.macd_slow + self.macd_sig + 40:
+            return False
+        tail = closes[-n:]
+        ef = ema(tail, self.macd_fast)
+        es = ema(tail, self.macd_slow)
+        off = self.macd_slow - self.macd_fast
+        sw = self.div_swing
+
+        def dif_at(i: int) -> float:  # closes 全局下标 -> DIF（es 下标对齐）
+            return ef[i - self.macd_slow + 1 + off] - es[i - self.macd_slow + 1]
+
+        if side == "long":  # 两个摆动低点：价格更低 + DIF 更高
+            lows = []
+            for i in range(sw, n - sw):
+                if tail[i] <= min(tail[i - sw:i + sw + 1]):
+                    lows.append((i, tail[i]))
+            if len(lows) < 2:
+                return False
+            a, b = lows[-2], lows[-1]
+            if b[0] < self.macd_slow - 1 or a[0] < self.macd_slow - 1:
+                return False
+            return b[1] < a[1] and dif_at(b[0]) > dif_at(a[0])
+        highs = []
+        for i in range(sw, n - sw):
+            if tail[i] >= max(tail[i - sw:i + sw + 1]):
+                highs.append((i, tail[i]))
+        if len(highs) < 2:
+            return False
+        a, b = highs[-2], highs[-1]
+        if b[0] < self.macd_slow - 1 or a[0] < self.macd_slow - 1:
+            return False
+        return b[1] > a[1] and dif_at(b[0]) < dif_at(a[0])
+
+    # ---------- 日线形态（前高受阻 -> 多单离场，布局回调空） ----------
+    def _update_d1_guard(self, history: list[dict]) -> None:
+        if not self.d1_enable:
+            return
+        d1 = d1_closed_tail(history, self.d1_swing_days + 2)
+        if len(d1) < self.d1_swing_days + 1:
+            return  # 日线数据不足：维持现状（中性）
+        last = d1[-1]
+        # 前高 = 最近 swing_days 个"已收盘日"的最高价（不含今日）
+        win = [b for b in d1 if b["ts"] <= last["ts"] - D1_MS][-self.d1_swing_days:]
+        if len(win) < 2:
+            return
+        x = max(b["h"] for b in win)
+        tol = x * self.d1_tol_pct
+        touches = sum(1 for b in win if b["h"] >= x - tol and b["c"] < x)
+        body = abs(last["c"] - last["o"])
+        upper_wick = last["h"] - max(last["o"], last["c"])
+        pin = body > 0 and upper_wick >= self.d1_pin_mult * body \
+            and last["c"] < (last["h"] + last["l"]) / 2 \
+            and last["h"] >= x * (1.0 - self.d1_tol_pct)  # 针出现在前高附近才有意义
+        if self._d1_guard is None and (touches >= self.d1_tests or pin) \
+                and last["c"] < x:
+            self._d1_guard = {"x": x, "ts": last["ts"]}
+            return
+        if self._d1_guard is not None:
+            if last["c"] > self._d1_guard["x"]:       # 日线收盘突破 -> 解除
+                self._d1_guard = None
+            elif last["ts"] - self._d1_guard["ts"] >= self.d1_guard_days * D1_MS:
+                self._d1_guard = None                 # 超时解除
+
+    def _long_blocked(self) -> bool:
+        return self._d1_guard is not None
 
     # ---------- 指标工具 ----------
     def _smacross(self, closes: list[float]) -> tuple[bool, bool]:
@@ -927,6 +1028,7 @@ class MaMacd(Strategy):
 
     # ---------- 主入口 ----------
     def on_bar(self, bar: dict, ctx) -> Signal:
+        self._update_d1_guard(ctx.history)
         ctx0 = self._context(ctx.history)
         if ctx0 is None:
             return Signal("none", "预热中(等1H)")
@@ -966,33 +1068,47 @@ class MaMacd(Strategy):
                 self._armed = None
 
         tpl = self._template(c, h1last, line, support, resistance, zone)
+        # 日线前高受阻态：封锁多头模板（帖子"多单都走，布局回调空"）
+        if self._d1_guard is not None and tpl in ("t1", "t3"):
+            tpl = ""
+            if self._armed == "long":
+                self._armed = None
+
+        def _div_ok(side: str) -> bool:
+            """背离过滤（默认关）；开启时入场需同向 MACD 背离确认。"""
+            if not self.div_filter:
+                return True
+            tail = [b["c"] for b in history[-self.div_win:]]
+            return self._divergence(tail, side)
 
         if self.confirm == "second":
             # 二次确认进场：同向交叉 + 已武装。位置在"首叉"时定（武装需在模板带内），
             # 二次交叉允许价格已离开原带（帖子语境=在位置上等第二脚）；
             # 失效由 摆动击穿/生命线翻侧/超时 过滤，不因离带而过早放弃
-            if gx and not spike and self._armed == "long":
+            if gx and not spike and self._armed == "long" and _div_ok("long"):
                 epl = tpl if tpl in ("t1", "t3") else ("t3" if h1last >= line else "t1")
                 return self._open("long", epl, bar, line, support, resistance, atr1)
-            if dx and not spike and self._armed == "short":
+            if dx and not spike and self._armed == "short" and _div_ok("short"):
                 epl = tpl if tpl in ("t2", "t4") else ("t4" if h1last <= line else "t2")
                 return self._open("short", epl, bar, line, support, resistance, atr1)
             # 首次信号 -> 只武装（不重复覆盖既有武装）
-            if self._armed is None and gx and not spike and tpl in ("t1", "t3"):
+            if self._armed is None and gx and not spike and tpl in ("t1", "t3") \
+                    and _div_ok("long"):
                 self._armed, self._armed_tpl = "long", tpl
                 window = history[-self.armed_look:]
                 self._armed_swing = min(b["l"] for b in window)
                 self._armed_bars = 0
-            elif self._armed is None and dx and not spike and tpl in ("t2", "t4"):
+            elif self._armed is None and dx and not spike and tpl in ("t2", "t4") \
+                    and _div_ok("short"):
                 self._armed, self._armed_tpl = "short", tpl
                 window = history[-self.armed_look:]
                 self._armed_swing = max(b["h"] for b in window)
                 self._armed_bars = 0
             return Signal("none")
         # confirm=any：模板内两情相悦直接进
-        if gx and not spike and tpl in ("t1", "t3"):
+        if gx and not spike and tpl in ("t1", "t3") and _div_ok("long"):
             return self._open("long", tpl, bar, line, support, resistance, atr1)
-        if dx and not spike and tpl in ("t2", "t4"):
+        if dx and not spike and tpl in ("t2", "t4") and _div_ok("short"):
             return self._open("short", tpl, bar, line, support, resistance, atr1)
         return Signal("none")
 
@@ -1023,7 +1139,7 @@ class MaMacd(Strategy):
         return Signal("open_short", note, frac=self.leg1)
 
     def _manage(self, pos, bar, history, h1, closes, line, atr1: float) -> Signal:
-        """持仓管理：保本/追踪移动止损、放量反向、顺线反向清仓、按批补仓。"""
+        """持仓管理：保本/追踪移动止损、日线形态离场、顺线反向清仓、按批补仓。"""
         c, entry = bar["c"], pos.entry
         h1last = h1[-1]["c"]
         ma_up, ma_down = self._smacross(closes)
@@ -1040,8 +1156,11 @@ class MaMacd(Strategy):
                 cand = self._hh - self.trail_atr_mult * atr1
                 if cand > self.sl_px:
                     self.sl_px = cand
-            # 放量大反向 bar（与持仓相反且幅度足够）-> 直接止盈
-            if spike and bar["l"] <= c - atr1 * 0.5:
+            # 日线前高受阻/新高针（帖子：多单都走，布局回调空）——优先于其他离场
+            if self._d1_guard is not None:
+                return Signal("close", "日线前高受阻：多单离场，等回调空")
+            # 持仓反向放量全平为可选旧口径（默认关：日内放量多为洗盘诱惑，勿被搞破防）
+            if self.vol_exit_opposite and spike and bar["l"] <= c - atr1 * 0.5:
                 return Signal("close", "放量大反向直接止盈")
             # 顺线仓（t3）：1H 收盘跌破生命线 -> 高周期反向清仓
             if self._tpl == "t3" and h1last < line:
@@ -1062,7 +1181,7 @@ class MaMacd(Strategy):
                 cand = self._hh + self.trail_atr_mult * atr1
                 if cand < self.sl_px:
                     self.sl_px = cand
-            if spike and bar["h"] >= c + atr1 * 0.5:
+            if self.vol_exit_opposite and spike and bar["h"] >= c + atr1 * 0.5:
                 return Signal("close", "放量大反向直接止盈")
             if self._tpl == "t4" and h1last > line:
                 return Signal("close", "高周期反向：1H收盘升破生命线清空")
@@ -1086,6 +1205,9 @@ class MaMacd(Strategy):
         self._recovered = True
         self._tpl = "recovered"
         self._hh = entry
+        self._d1_guard = None
+        if self.d1_enable:  # 恢复长仓也尊重日线形态（若已前高受阻则会被 manage 离场）
+            self._update_d1_guard(history)
 
     def describe(self, history: list[dict], position) -> dict:
         if getattr(position, "is_open", False):

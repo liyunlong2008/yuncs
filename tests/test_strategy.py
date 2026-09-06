@@ -254,3 +254,131 @@ def test_mamacd_breakeven_and_trail_ratchet_then_stop():
     crash = {"ts": crash["ts"], "o": 910, "h": 912, "l": 880, "c": 885, "v": 10.0}
     hit = s.evaluate_exits(crash, "long")
     assert hit is not None and hit[1] == "止损" and hit[2] == 1.0
+
+
+# ---------- v2 行为：放量口径 / 背离过滤 / 日线前高受阻 ----------
+
+def test_mamacd_vol_exit_opposite_default_off_opt_in():
+    """持仓中放量反向大 bar：默认不再全平（2026-09 帖子口径：日内放量多为洗盘）；
+    vol_exit_opposite=True 才恢复旧行为。"""
+    base = [1000.0] * 700 + [1000.4] + [1000.2] * 12 + [1000.5]
+    for params, expect_close in (({}, False), ({"vol_exit_opposite": True}, True)):
+        s = create_strategy("ma_macd", params)
+        ev, s = drive(s, base)
+        assert ev and ev[0][1] == "open_long"
+        entry = base[713]
+
+        class _Long:
+            is_open = True
+            side = "long"
+        pos = _Long()
+        pos.entry = entry
+        pos.size_eth = 0.05
+        # 放量下影大 bar：不破止损(996.9)、不破生命线，仅"放量+反向形态"
+        drop = base[:714] + [{"c": 1000.2, "l": 998.9, "h": 1001.6, "v": 200.0}]
+        hist = b15([d["c"] if isinstance(d, dict) else d for d in drop],
+                   vol_at={714: 200.0})
+        # 手动构造最后一根带放量的反向形态 bar
+        hist[-1] = {"ts": hist[-1]["ts"], "o": 1000.5, "h": 1001.6,
+                    "l": 998.9, "c": 1000.2, "v": 200.0}
+        sig = s.on_bar(hist[-1], _Ctx(hist, pos))
+        if expect_close:
+            assert sig.action == "close" and "放量" in sig.reason
+        else:
+            assert sig.action != "close"
+
+
+def test_mamacd_divergence_filter_shapes_and_gate():
+    """背离形状判定（B站教学模块）+ div_filter 对无背离入场的拦截。"""
+    s = create_strategy("ma_macd", {"div_filter": True})
+
+    def seg(n, p0, p1):
+        return [p0 + (p1 - p0) * k / n for k in range(1, n + 1)]
+
+    plateau = [1000.0] * 200
+    shape_a = (plateau + seg(8, 1000, 992) + [990.0] + seg(10, 990, 1006)
+               + seg(90, 1006, 990) + [988.0] + seg(6, 988, 995))
+    shape_b = (plateau + seg(8, 1000, 992) + [990.0] + seg(10, 990, 1006)
+               + seg(8, 1006, 987) + [985.0] + seg(6, 985, 992))
+    shape_c = (plateau + seg(8, 1000, 992) + [990.0] + seg(10, 990, 1006)
+               + seg(14, 1006, 998) + [996.0] + seg(6, 996, 1002))
+    assert s._divergence(shape_a, "long") is True   # 低点更低 + 动能减弱
+    assert s._divergence(shape_b, "long") is False  # 低点更低 + 动能增强
+    assert s._divergence(shape_c, "long") is False  # 低点抬高
+    # 门控：无背离的单跳序列在 confirm=any 下被拦截
+    seq = [1000.0] * 700 + [1000.4]
+    ev, _ = drive(create_strategy("ma_macd", {"confirm": "any", "div_filter": True}), seq)
+    assert ev == []
+    ev, _ = drive(create_strategy("ma_macd", {"confirm": "any"}), seq)
+    assert ev and ev[0][0] == 700
+
+
+def _d1_day(day_open, peak, day_close):
+    """一天 96 根 15m：先升到 peak 再回落收 day_close。"""
+    def seg(n, p0, p1):
+        return [p0 + (p1 - p0) * k / n for k in range(1, n + 1)]
+    return seg(40, day_open, peak) + seg(56, peak, day_close)
+
+
+def test_mamacd_d1_guard_activates_blocks_long_and_breakout_clears():
+    """日线前高多次试探不破 -> 多单守卫激活（封锁多头、离场等待回调空）；
+    日线收盘突破前高后解除（需下一日封口确认）。"""
+    params = {"d1_enable": True, "d1_swing_days": 10, "d1_tests": 2,
+              "d1_tol_pct": 0.002, "d1_guard_days": 3}
+    s = create_strategy("ma_macd", params)
+    class _Flat:
+        is_open = False
+        side = ""
+    pos = _Flat()
+    # 11 天爬升（给前高窗口）-> 试探日1（摸旧高回落）
+    pxs, cur = [], 1000.0
+    for k in range(11):
+        tgt = 1000 + k * 10
+        pxs += _d1_day(cur, tgt + 3, tgt)
+        cur = tgt
+    pxs += _d1_day(cur, cur + 3, cur - 8)
+    for i in range(300, len(pxs), 1):
+        s.on_bar(b15(pxs[:i + 1])[-1], _Ctx(b15(pxs[:i + 1]), pos))
+    assert s._d1_guard is None  # 试探 1 次不足
+    # 试探日2：摸到 X 附近收低 -> 激活
+    from app.strategy import d1_closed_tail
+    X = max(b["h"] for b in d1_closed_tail(b15(pxs), 12)[-11:-1])
+    # 试探日2 + 次日 4 根封口（试探日收满后才能计入前高窗口）
+    pxs += _d1_day(pxs[-1], X / 1.001 + 0.2, pxs[-1] - 8)
+    pxs += [pxs[-1]] * 4
+    hist = b15(pxs)
+    s.on_bar(hist[-1], _Ctx(hist, pos))
+    assert s._d1_guard is not None and s._long_blocked()
+    guard_x = s._d1_guard["x"]
+    # 突破日：收盘越过前高 -> 次日封口确认后解除
+    pxs += _d1_day(pxs[-1], guard_x / 1.001 + 20, guard_x + 15)
+    pxs += [pxs[-1]] * 4
+    hist = b15(pxs)
+    s.on_bar(hist[-1], _Ctx(hist, pos))
+    assert s._d1_guard is None
+
+
+def test_mamacd_d1_guard_closes_open_long():
+    """守卫激活时持仓中的多单 -> '日线前高受阻'离场信号。"""
+    s = create_strategy("ma_macd", {"d1_enable": True, "d1_swing_days": 10,
+                                    "d1_tests": 2, "d1_tol_pct": 0.002})
+    from app.strategy import d1_closed_tail
+    pxs, cur = [], 1000.0
+    for k in range(11):
+        tgt = 1000 + k * 10
+        pxs += _d1_day(cur, tgt + 3, tgt)
+        cur = tgt
+    pxs += _d1_day(cur, cur + 3, cur - 8)
+    X = max(b["h"] for b in d1_closed_tail(b15(pxs), 12)[-11:-1])
+    pxs += _d1_day(pxs[-1], X / 1.001 + 0.2, pxs[-1] - 8)   # 试探2
+    pxs += [pxs[-1]] * 4                                    # 封口 -> 激活
+    hist = b15(pxs)
+
+    class _Long:
+        is_open = True
+        side = "long"
+    pos = _Long()
+    pos.entry = pxs[-1]
+    pos.size_eth = 0.05
+    sig = s.on_bar(hist[-1], _Ctx(hist, pos))
+    assert sig.action == "close" and "日线前高受阻" in sig.reason
