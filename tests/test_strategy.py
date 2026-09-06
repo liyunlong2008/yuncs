@@ -218,6 +218,29 @@ def test_mamacd_divergence_filter_shapes_and_gate():
     assert ev and ev[0][0] == 700
 
 
+def test_mamacd_structure_levels_detection():
+    """1H 结构位引擎：多次触碰的摆动位被聚类为有效支撑/压力（含目标选择）。"""
+    s = create_strategy("ma_macd", {"struct_levels": True})
+    # 1000<->1010 区间反复震荡 ~40 轮（每小时 4 根 15m，共 ~160h）
+    pxs = []
+    for _ in range(40):
+        pxs += [1000.0 + i * 10 / 7 for i in range(8)]      # 升到 ~1010
+        pxs += [1010.0 - i * 10 / 7 for i in range(8)]      # 回落到 ~1000
+    from app.strategy import h1_closed_tail
+    h1 = h1_closed_tail(b15(pxs), 150)
+    lv = s._structure_levels(h1)
+    assert lv
+    supports = [px for px, _ in lv["supports"]]
+    resists = [px for px, _ in lv["resist"]]
+    assert any(px < 1001.0 for px in supports), supports[:5]    # 下沿 ~999
+    assert any(px > 1009.0 for px in resists), resists[:5]      # 上沿 ~1011
+    # 站在 1005（区间中）时：最近支撑在下、压力在上
+    ns = s._nearest_support(1005.0, lv)
+    nr = s._nearest_resist(1005.0, lv)
+    assert ns is not None and ns < 1005.0 and 1005.0 - ns < 8.0
+    assert nr is not None and nr > 1005.0 and nr - 1005.0 < 8.0
+
+
 def _d1_day(day_open, peak, day_close):
     """一天 96 根 15m：先升到 peak 再回落收 day_close。"""
     def seg(n, p0, p1):

@@ -214,6 +214,13 @@ class MaMacd(Strategy):
         # 只放行顺日线方向的位置（多头日=仅 t1/t3，空头日=仅 t2/t4）
         self.d1_bias_ma = i("d1_bias_ma", 0)
         self._d1_bias_up: Optional[bool] = None
+        # 1H 结构位引擎（财道图面支撑/压力的机械化）：0=关
+        # 摆动点聚类成水平位；T1/T2 要求站上 ≥level_min_touch 次的位；目标=最近结构位
+        self.struct_levels = params.get("struct_levels", False)
+        self.level_fractal = i("level_fractal", 2)     # 1H 摆动点 ±N 根
+        self.level_min_touch = i("level_min_touch", 2)  # 有效位最少触碰次数
+        self.level_tol_atr = f("level_tol_atr", 0.30)   # 聚类容差 = atr1h × N
+        self._levels_cache: Optional[dict] = None       # {"supports":[(px,touches)], "resist":[...]}
         self.leg1 = f("leg1_pct", 0.10)
         self.leg2 = f("leg2_pct", 0.30)
         self.leg3 = f("leg3_pct", 0.60)
@@ -337,6 +344,57 @@ class MaMacd(Strategy):
 
     def _long_blocked(self) -> bool:
         return self._d1_guard is not None
+
+    # ---------- 1H 结构位引擎（财道图面支撑/压力的机械化） ----------
+    def _structure_levels(self, h1: list[dict]) -> dict:
+        """1H 摆动点(±k 根)聚类成水平位；触碰次数不足 level_min_touch 的位不算有效。
+
+        返回 {"ts": 最后1H ts, "supports": [(px, touches)...], "resist": [...]}
+        按 ts 缓存（1H 未收盘前不重算）。
+        """
+        if not self.struct_levels:
+            return {}
+        key = h1[-1]["ts"]
+        cache = getattr(self, "_levels_cache", None)
+        if cache and cache.get("ts") == key:
+            return cache
+        k = self.level_fractal
+        n = len(h1)
+        lows, highs = [], []
+        if n >= 2 * k + 3:
+            for i in range(k, n - k):
+                win = h1[i - k:i + k + 1]
+                if h1[i]["l"] <= min(b["l"] for b in win):
+                    lows.append(h1[i]["l"])
+                if h1[i]["h"] >= max(b["h"] for b in win):
+                    highs.append(h1[i]["h"])
+        atr1 = calc_atr(h1, self.atr_p) or 0.0
+        tol = max(atr1 * self.level_tol_atr, h1[-1]["c"] * 0.0008)
+
+        def cluster(vals: list[float]) -> list[tuple[float, int]]:
+            out: list[list] = []
+            for v in sorted(vals):
+                if out and v - out[-1][0] <= tol:
+                    px, cnt = out[-1]
+                    out[-1] = [(px * cnt + v) / (cnt + 1), cnt + 1]
+                else:
+                    out.append([v, 1])
+            return [(px, cnt) for px, cnt in out
+                    if cnt >= self.level_min_touch]
+
+        self._levels_cache = {"ts": key,
+                              "supports": cluster(lows), "resist": cluster(highs)}
+        return self._levels_cache
+
+    @staticmethod
+    def _nearest_support(px: float, levels: dict) -> Optional[float]:
+        below = [s[0] for s in levels.get("supports", []) if s[0] <= px * 1.0008]
+        return max(below) if below else None
+
+    @staticmethod
+    def _nearest_resist(px: float, levels: dict) -> Optional[float]:
+        above = [s[0] for s in levels.get("resist", []) if s[0] >= px * 0.9992]
+        return min(above) if above else None
 
     # ---------- 指标工具 ----------
     def _smacross(self, closes: list[float]) -> tuple[bool, bool]:
@@ -478,6 +536,21 @@ class MaMacd(Strategy):
                 self._armed = None
 
         tpl = self._template(c, h1last, line, support, resistance, zone)
+        # 1H 结构位引擎：T1 须贴近有效支撑、T2 须贴近有效压力（财道"只在支撑压力位交易"）
+        if self.struct_levels:
+            lv = self._structure_levels(h1)
+            if tpl == "t1":
+                sup = self._nearest_support(c, lv)
+                if sup is None or c - sup > zone:
+                    tpl = ""
+            elif tpl == "t2":
+                res = self._nearest_resist(c, lv)
+                if res is None or res - c > zone:
+                    tpl = ""
+            s_res = self._nearest_resist(c, lv) or resistance
+            s_sup = self._nearest_support(c, lv) or support
+        else:
+            s_res, s_sup = resistance, support
         # 日线前高受阻态：封锁多头模板（帖子"多单都走，布局回调空"）
         if self._d1_guard is not None and tpl in ("t1", "t3"):
             tpl = ""
@@ -498,11 +571,11 @@ class MaMacd(Strategy):
             if gx and not spike and self._armed == "long" and _div_ok("long") \
                     and self._bias_ok("long"):
                 epl = tpl if tpl in ("t1", "t3") else ("t3" if h1last >= line else "t1")
-                return self._open("long", epl, bar, line, support, resistance, atr1)
+                return self._open("long", epl, bar, line, s_sup, s_res, atr1)
             if dx and not spike and self._armed == "short" and _div_ok("short") \
                     and self._bias_ok("short"):
                 epl = tpl if tpl in ("t2", "t4") else ("t4" if h1last <= line else "t2")
-                return self._open("short", epl, bar, line, support, resistance, atr1)
+                return self._open("short", epl, bar, line, s_sup, s_res, atr1)
             # 首次信号 -> 只武装（不重复覆盖既有武装）
             if self._armed is None and gx and not spike and tpl in ("t1", "t3") \
                     and _div_ok("long") and self._bias_ok("long"):
@@ -520,10 +593,10 @@ class MaMacd(Strategy):
         # confirm=any：模板内两情相悦直接进
         if gx and not spike and tpl in ("t1", "t3") and _div_ok("long") \
                 and self._bias_ok("long"):
-            return self._open("long", tpl, bar, line, support, resistance, atr1)
+            return self._open("long", tpl, bar, line, s_sup, s_res, atr1)
         if dx and not spike and tpl in ("t2", "t4") and _div_ok("short") \
                 and self._bias_ok("short"):
-            return self._open("short", tpl, bar, line, support, resistance, atr1)
+            return self._open("short", tpl, bar, line, s_sup, s_res, atr1)
         return Signal("none")
 
     def _open(self, side: str, tpl: str, bar, line, support, resistance,
