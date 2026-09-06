@@ -19,9 +19,17 @@ class Signal:
 
 
 def create_strategy(name: str, params: dict) -> "Strategy":
-    """策略工厂：引擎/回测通过名字取策略。项目只保留一个内置策略 ma_macd
-    （旧策略族 2026-09-06 已删除：修复回测 close 语义后实证全负，见 README）。"""
-    return MaMacd(params or {})
+    """策略工厂：引擎/回测通过名字取策略。
+
+    内置：ma_macd（默认/生产研究主线）；macd_1h（v6 实验：1H 交叉定趋势、
+    15m 执行的陪跑族）。2026-09-06 已删除的旧策略族见 README 研究史。
+    未知名字回退 ma_macd。
+    """
+    registry = {
+        MaMacd.name: MaMacd,
+        Macd1h.name: Macd1h,
+    }
+    return registry.get(name or MaMacd.name, MaMacd)(params or {})
 
 class Strategy:
     name = "base"
@@ -717,3 +725,144 @@ class MaMacd(Strategy):
                         f" · 等两情相悦信号{armed_txt}"}
 
 
+
+
+class Macd1h(Strategy):
+    """1H 两情相悦交叉定趋势、15m 执行、陪跑式离场（财道"趋势单"语义，v6 实验）。
+
+    与 ma_macd（15m 信号 × 1H 生命线）正交：这里是 **1H 信号 × 持仓陪跑**——
+    - 每收盘一个 1H 桶：MA5/MA10 + MACD(12,26,9) 同根双交叉（两情相悦）
+    - 金叉 -> 趋势多（首次交叉收盘确认后进场，不再等 15m 二次信号）；
+      死叉 -> 清多（反向交叉即离场，无"减仓"档 v1）
+    - 进场即带 ATR 保护止损；浮盈 ≥be_atr×ATR 移保本；随后按 1H 高点 chandelier
+      只朝有利方向追踪（让利润陪跑）
+    - 同一方向重复交叉不重复进场（单笔趋势内不加仓，v1）
+    预期：频率≈1H 双交叉频次（0.5~2/日），持仓小时-天级，摩擦相对 ATR 占比低。
+    """
+
+    name = "macd_1h"
+
+    def __init__(self, params: dict):
+        super().__init__(params)
+        f = lambda k, d: float(params.get(k, d))
+        i = lambda k, d: int(params.get(k, d))
+        self.ma_fast = i("ma_fast", 5)
+        self.ma_slow = i("ma_slow", 10)
+        self.macd_fast = i("macd_fast", 12)
+        self.macd_slow = i("macd_slow", 26)
+        self.macd_sig = i("macd_sig", 9)
+        self.atr_p = i("atr_p", 14)
+        self.stop_atr_mult = f("stop_atr_mult", 1.8)
+        self.be_atr_mult = f("be_atr_mult", 1.0)
+        self.trail_atr_mult = f("trail_atr_mult", 2.0)
+        self._h1_ts: Optional[float] = None   # 已处理的最后 1H 桶起点
+        self._trend: Optional[str] = None     # long/short（最近 1H 双交叉方向）
+        self._hh: float = 0.0                 # 持仓以来有利方向极值（含当前 15m）
+        self._atr1: float = 0.0
+        self._be_done: bool = False
+
+    def on_open(self) -> None:
+        super().on_open()
+        self._trend = None
+        self._hh = 0.0
+        self._be_done = False
+
+    # ---------- 1H 两情相悦 ----------
+    def _h1_love_cross(self, closes1h: list[float]) -> tuple[bool, bool]:
+        """最新闭合 1H 桶上是否出现 金叉/死叉（两情相悦）。"""
+        n = len(closes1h)
+        if n < self.macd_slow + self.macd_sig + 2:
+            return False, False
+        nf, ns = self.ma_fast, self.ma_slow
+        fp = sum(closes1h[-(nf + 1):-1]) / nf
+        fc = sum(closes1h[-nf:]) / nf
+        sp = sum(closes1h[-(ns + 1):-1]) / ns
+        sc = sum(closes1h[-ns:]) / ns
+        ma_up, ma_down = fc > sc and fp <= sp, fc < sc and fp >= sp
+        ef = ema(closes1h, self.macd_fast)
+        es = ema(closes1h, self.macd_slow)
+        off = self.macd_slow - self.macd_fast
+        dif = [ef[i + off] - es[i] for i in range(len(es))]
+        dea = ema(dif, self.macd_sig)
+        if len(dea) < 2:
+            return False, False
+        up = ma_up and dif[-1] > dea[-1] and dif[-2] <= dea[-2]
+        down = ma_down and dif[-1] < dea[-1] and dif[-2] >= dea[-2]
+        return up, down
+
+    def on_bar(self, bar: dict, ctx) -> Signal:
+        h1 = h1_closed_tail(history15=ctx.history, max_h1=90)
+        need = self.macd_slow + self.macd_sig + 2
+        if len(h1) < need:
+            return Signal("none", "预热中(等1H)")
+        fresh = h1[-1]["ts"] != self._h1_ts
+        if fresh:
+            self._h1_ts = h1[-1]["ts"]
+            atr1 = calc_atr(h1, self.atr_p)
+            if atr1 is not None and atr1 > 0:
+                self._atr1 = atr1
+            closes1h = [b["c"] for b in h1]
+            up, down = self._h1_love_cross(closes1h)
+            if up:
+                self._trend = "long"
+            elif down:
+                self._trend = "short"
+            if ctx.position.is_open:
+                # 持仓中：反向 1H 双交叉 -> 清仓（趋势单结束；下一同向交叉自然重开）
+                if ctx.position.side == "long" and down:
+                    return Signal("close", "1H 死叉清多")
+                if ctx.position.side == "short" and up:
+                    return Signal("close", "1H 金叉清空")
+            elif up:
+                self._be_done = False
+                self._hh = bar["h"]
+                self.sl_px = bar["c"] - self._atr1 * self.stop_atr_mult
+                return Signal("open_long", f"1H 两情相悦金叉 开多 @{bar['c']:.0f}")
+            elif down:
+                self._be_done = False
+                self._hh = bar["l"]
+                self.sl_px = bar["c"] + self._atr1 * self.stop_atr_mult
+                return Signal("open_short", f"1H 两情相悦死叉 开空 @{bar['c']:.0f}")
+        # 持仓管理（15m 级）：保本 + chandelier 追踪
+        if ctx.position.is_open:
+            c, entry = bar["c"], ctx.position.entry
+            if ctx.position.side == "long":
+                self._hh = max(self._hh, bar["h"])
+                if not self._be_done and self.sl_px is not None and \
+                        c - entry >= self.be_atr_mult * self._atr1:
+                    self.sl_px = max(self.sl_px, entry)
+                    self._be_done = True
+                if self._be_done and self.sl_px is not None:
+                    cand = self._hh - self.trail_atr_mult * self._atr1
+                    if cand > self.sl_px:
+                        self.sl_px = cand
+            else:
+                self._hh = min(self._hh, bar["l"])
+                if not self._be_done and self.sl_px is not None and \
+                        entry - c >= self.be_atr_mult * self._atr1:
+                    self.sl_px = min(self.sl_px, entry)
+                    self._be_done = True
+                if self._be_done and self.sl_px is not None:
+                    cand = self._hh + self.trail_atr_mult * self._atr1
+                    if cand < self.sl_px:
+                        self.sl_px = cand
+        return Signal("none")
+
+    def arm_open_stop(self, history: list[dict], side: str, entry: float) -> None:
+        h1 = h1_closed_tail(history15=history, max_h1=90)
+        atr1 = calc_atr(h1, self.atr_p) or entry * 0.005
+        self.sl_px = entry - atr1 * self.stop_atr_mult if side == "long" \
+            else entry + atr1 * self.stop_atr_mult
+        self._atr1 = atr1
+        self._be_done = False
+        self._trend = side
+
+    def describe(self, history: list[dict], position) -> dict:
+        if getattr(position, "is_open", False):
+            return {"pos": position.side, "legs": 1}
+        h1 = h1_closed_tail(history15=history, max_h1=90)
+        if len(h1) < self.macd_slow + self.macd_sig + 2:
+            return {"pos": "flat", "note": "预热中（等 1H 两情相悦数据足够）"}
+        trend_txt = {"long": "多头趋势中(金叉后)等反手信号",
+                     "short": "空头趋势中(死叉后)等反手信号"}.get(self._trend, "空仓等 1H 两情相悦")
+        return {"pos": "flat", "note": f"1H 趋势：{trend_txt}"}

@@ -50,9 +50,11 @@ def drive(s, pxs, vol_at=None):
     return ev, s
 
 
-def test_factory_always_mamacd():
-    """项目只保留一个内置策略：任何名字都解析到 ma_macd。"""
+def test_factory_registry_and_fallback():
+    """工厂：ma_macd 默认；macd_1h(v6 实验)可寻址；未知名字回退 ma_macd。"""
+    from app.strategy import Macd1h
     assert isinstance(create_strategy("ma_macd", {}), MaMacd)
+    assert isinstance(create_strategy("macd_1h", {}), Macd1h)
     assert create_strategy("不存在的策略", {}).name == "ma_macd"
 
 
@@ -325,3 +327,42 @@ def test_mamacd_d1_guard_closes_open_long():
     pos.size_eth = 0.05
     sig = s.on_bar(hist[-1], _Ctx(hist, pos))
     assert sig.action == "close" and "日线前高受阻" in sig.reason
+
+
+
+def test_macd1h_opens_on_h1_golden_cross_and_flip_closes():
+    """1H 双交叉开多；反向 1H 双交叉清多（v6 陪跑族主干）。"""
+    from app.strategy import Macd1h
+    s = create_strategy("macd_1h", {})
+    assert isinstance(s, Macd1h)
+    # 预热 ~46 个闭合 1H（45h 平盘 1000 + 1h 拉起到 1005 触发金叉）
+    warm = [1000.0] * 180                       # 45h
+    up_hour = [1000.0 + i * 5 / 3 for i in range(1, 5)]  # 1001.7->1005
+    seq = warm + up_hour + [1005.0] * 4         # 封口：下一小时开始才见金叉
+    hist = b15(seq)
+    pos = _Pos()
+    opened = None
+    for i in range(len(seq)):
+        sig = s.on_bar(hist[i], _Ctx(b15(seq[:i + 1]), pos))
+        if sig.action == "open_long":
+            opened = i
+            break
+    assert opened is not None
+    assert s.sl_px is not None and s.sl_px < seq[opened]
+    # 开多后立即连续两小时急跌 -> 1H 死叉清多（确定性序列由搜索标定）
+    class _Long:
+        is_open = True
+        side = "long"
+    pos = _Long()
+    pos.entry = seq[opened]
+    drop = [1005.0 - 20.0 * (kk + 1) / 4 for kk in range(4)]   # 跌 20/小时
+    drop2 = [drop[-1] - 20.0 * (kk + 1) / 4 for kk in range(4)]
+    seq2 = seq + drop + drop2 + [drop2[-1]] * 4
+    closed = None
+    s2 = create_strategy("macd_1h", {})
+    for i in range(len(seq2)):
+        sig = s2.on_bar(b15(seq2[:i + 1])[-1], _Ctx(b15(seq2[:i + 1]), pos))
+        if sig.action == "close":
+            closed = i
+            break
+    assert closed is not None and closed == 192, f"1H 死叉应清多, got {closed}"
