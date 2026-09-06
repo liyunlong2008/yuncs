@@ -256,6 +256,29 @@ def test_mamacd_d1_guard_activates_blocks_long_and_breakout_clears():
     assert s._d1_guard is None
 
 
+def _day_const(close, days):
+    """days 天价格恒定的 15m 序列（日线收盘=close）。"""
+    out = []
+    for d in range(days):
+        out += [close] * 96
+    return out
+
+
+def test_mamacd_d1_bias_up_down_classification():
+    """日线趋势偏置：收盘 vs D1 MA20；多头日禁空/空头日禁多的门控。"""
+    s = create_strategy("ma_macd", {"d1_bias_ma": 20})
+    # 前 5 天 1000 + 后 18 天 1010 -> 最近收盘 1010 >= MA20(≈1009) -> 多头日
+    hist = b15(_day_const(1000.0, 5) + _day_const(1010.0, 18))
+    s._update_d1_bias(hist)
+    assert s._d1_bias_up is True
+    assert s._bias_ok("long") and not s._bias_ok("short")
+    # 后 3 天跌回 1000 -> 最近收盘 1000 < MA20(≈1008.5) -> 空头日
+    hist2 = b15(_day_const(1000.0, 5) + _day_const(1010.0, 18) + _day_const(1000.0, 3))
+    s._update_d1_bias(hist2)
+    assert s._d1_bias_up is False
+    assert s._bias_ok("short") and not s._bias_ok("long")
+
+
 def test_mamacd_d1_guard_closes_open_long():
     """守卫激活时持仓中的多单 -> '日线前高受阻'离场信号。"""
     s = create_strategy("ma_macd", {"d1_enable": True, "d1_swing_days": 10,

@@ -59,8 +59,8 @@ class Engine:
         self.round_no: int = 0
 
         self._bars: list[dict] = []
-        # 窗口需覆盖策略最高周期指标预热：1H MA60 需 ≥240 根 15m + 摆动窗/止损余量
-        self._history_limit = 1500
+        # 窗口需覆盖策略最高周期指标预热：1H MA60 ≥240 根 15m、日线 MA20 偏置 ≥~2120 根
+        self._history_limit = 3000
         self._warmed = False
         self._plan_eth = 0.0  # 分批计划全仓目标（首笔开仓锁定，平尽后清零）
         self._next_funding_ts: Optional[float] = None

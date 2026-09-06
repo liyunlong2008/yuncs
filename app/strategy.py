@@ -210,6 +210,10 @@ class MaMacd(Strategy):
         self.d1_tol_pct = f("d1_tol_pct", 0.002)     # "触及前高"容差（相对 X 的比例）
         self.d1_pin_mult = f("d1_pin_mult", 2.0)     # 新高针：上影 >= mult×实体
         self.d1_guard_days = i("d1_guard_days", 3)   # 空头布局态最长持续天数
+        # 日线趋势偏置（帖子：日线定大方向）：0=关；>0 时按最近收盘日 vs D1 MA(N)
+        # 只放行顺日线方向的位置（多头日=仅 t1/t3，空头日=仅 t2/t4）
+        self.d1_bias_ma = i("d1_bias_ma", 0)
+        self._d1_bias_up: Optional[bool] = None
         self.leg1 = f("leg1_pct", 0.10)
         self.leg2 = f("leg2_pct", 0.30)
         self.leg3 = f("leg3_pct", 0.60)
@@ -309,6 +313,27 @@ class MaMacd(Strategy):
                 self._d1_guard = None
             elif last["ts"] - self._d1_guard["ts"] >= self.d1_guard_days * D1_MS:
                 self._d1_guard = None                 # 超时解除
+
+    def _update_d1_bias(self, history: list[dict]) -> None:
+        """日线趋势偏置：最近收盘日 vs D1 MA(N)；数据不足置 None（中性）。"""
+        if self.d1_bias_ma <= 0:
+            return
+        d1 = d1_closed_tail(history, self.d1_bias_ma + 2)
+        if len(d1) < self.d1_bias_ma + 1:
+            self._d1_bias_up = None
+            return
+        closes = [b["c"] for b in d1]
+        ma = calc_sma(closes, self.d1_bias_ma)
+        if ma is None:
+            self._d1_bias_up = None
+            return
+        self._d1_bias_up = closes[-1] >= ma
+
+    def _bias_ok(self, side: str) -> bool:
+        """顺日线方向检查：多头日禁空、空头日禁多；bias 关闭/数据不足=放行。"""
+        if self._d1_bias_up is None:
+            return True
+        return self._d1_bias_up if side == "long" else not self._d1_bias_up
 
     def _long_blocked(self) -> bool:
         return self._d1_guard is not None
@@ -411,6 +436,8 @@ class MaMacd(Strategy):
 
     # ---------- 主入口 ----------
     def on_bar(self, bar: dict, ctx) -> Signal:
+        if self.d1_bias_ma > 0:
+            self._update_d1_bias(ctx.history)
         self._update_d1_guard(ctx.history)
         ctx0 = self._context(ctx.history)
         if ctx0 is None:
@@ -468,30 +495,34 @@ class MaMacd(Strategy):
             # 二次确认进场：同向交叉 + 已武装。位置在"首叉"时定（武装需在模板带内），
             # 二次交叉允许价格已离开原带（帖子语境=在位置上等第二脚）；
             # 失效由 摆动击穿/生命线翻侧/超时 过滤，不因离带而过早放弃
-            if gx and not spike and self._armed == "long" and _div_ok("long"):
+            if gx and not spike and self._armed == "long" and _div_ok("long") \
+                    and self._bias_ok("long"):
                 epl = tpl if tpl in ("t1", "t3") else ("t3" if h1last >= line else "t1")
                 return self._open("long", epl, bar, line, support, resistance, atr1)
-            if dx and not spike and self._armed == "short" and _div_ok("short"):
+            if dx and not spike and self._armed == "short" and _div_ok("short") \
+                    and self._bias_ok("short"):
                 epl = tpl if tpl in ("t2", "t4") else ("t4" if h1last <= line else "t2")
                 return self._open("short", epl, bar, line, support, resistance, atr1)
             # 首次信号 -> 只武装（不重复覆盖既有武装）
             if self._armed is None and gx and not spike and tpl in ("t1", "t3") \
-                    and _div_ok("long"):
+                    and _div_ok("long") and self._bias_ok("long"):
                 self._armed, self._armed_tpl = "long", tpl
                 window = history[-self.armed_look:]
                 self._armed_swing = min(b["l"] for b in window)
                 self._armed_bars = 0
             elif self._armed is None and dx and not spike and tpl in ("t2", "t4") \
-                    and _div_ok("short"):
+                    and _div_ok("short") and self._bias_ok("short"):
                 self._armed, self._armed_tpl = "short", tpl
                 window = history[-self.armed_look:]
                 self._armed_swing = max(b["h"] for b in window)
                 self._armed_bars = 0
             return Signal("none")
         # confirm=any：模板内两情相悦直接进
-        if gx and not spike and tpl in ("t1", "t3") and _div_ok("long"):
+        if gx and not spike and tpl in ("t1", "t3") and _div_ok("long") \
+                and self._bias_ok("long"):
             return self._open("long", tpl, bar, line, support, resistance, atr1)
-        if dx and not spike and tpl in ("t2", "t4") and _div_ok("short"):
+        if dx and not spike and tpl in ("t2", "t4") and _div_ok("short") \
+                and self._bias_ok("short"):
             return self._open("short", tpl, bar, line, support, resistance, atr1)
         return Signal("none")
 
@@ -542,6 +573,9 @@ class MaMacd(Strategy):
             # 日线前高受阻/新高针（帖子：多单都走，布局回调空）——优先于其他离场
             if self._d1_guard is not None:
                 return Signal("close", "日线前高受阻：多单离场，等回调空")
+            # 日线趋势偏置翻转（多头日 -> 空头日）：顺大势原则离场
+            if self.d1_bias_ma > 0 and self._d1_bias_up is False:
+                return Signal("close", "日线转空：多单离场")
             # 持仓反向放量全平为可选旧口径（默认关：日内放量多为洗盘诱惑，勿被搞破防）
             if self.vol_exit_opposite and spike and bar["l"] <= c - atr1 * 0.5:
                 return Signal("close", "放量大反向直接止盈")
@@ -564,6 +598,8 @@ class MaMacd(Strategy):
                 cand = self._hh + self.trail_atr_mult * atr1
                 if cand < self.sl_px:
                     self.sl_px = cand
+            if self.d1_bias_ma > 0 and self._d1_bias_up is True:
+                return Signal("close", "日线转多：空单离场")
             if self.vol_exit_opposite and spike and bar["h"] >= c + atr1 * 0.5:
                 return Signal("close", "放量大反向直接止盈")
             if self._tpl == "t4" and h1last > line:
