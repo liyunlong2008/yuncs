@@ -41,7 +41,7 @@ class RiskConfig(BaseModel):
 
 
 class StrategyConfig(BaseModel):
-    name: str = "rsi_revert"  # 默认策略（2026-09-06 复核：20U 口径下全候选未过 1.0 红线，见 README 补充研究）
+    name: str = "ma_macd"  # 项目唯一内置策略（旧策略族已删：修复回测 close 语义后实证全负）
     params: dict = Field(default_factory=dict)
 
 

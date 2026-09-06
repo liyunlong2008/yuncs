@@ -49,7 +49,7 @@ OKX ETH-USDT-SWAP 小资金挑战赛量化机器人（无胜利点、动态出�
 okx_math / okx_feed       地基：OKX 计算方法 + 行情/规格（无业务依赖）
 fills / wallet            撮合模型 + 纸盘钱包
 broker                    paper/live 统一接口（依赖 feed/okx_math/wallet）
-strategy / challenge      策略接口 + trend_ema / 挑战引擎（被 engine 与 backtest 复用）
+strategy / challenge      策略接口 + ma_macd（唯一内置策略）/ 挑战引擎（被 engine 与 backtest 复用）
 engine                    主循环（paper/live）
 backtest                  玩法适配回测（复用 strategy/challenge/fills/okx_math）
 store / api / static      持久化 / FastAPI / 看板
@@ -57,7 +57,7 @@ store / api / static      持久化 / FastAPI / 看板
 
 - **同一套策略代码跑 回测/纸盘/实盘**（`strategy.py`），挑战引擎三模式共用（`challenge.py`）——新策略只加类、新规则只改 engine，不许复制逻辑到各模式
 - 依赖单向：engine/backtest → strategy/challenge/broker → okx_math/fills/wallet → okx_feed
-- 行情源：WS 优先，REST 降级；策略是 bar 驱动（1m 默认），不要改成 tick 级实时框架
+- 行情源：WS 优先，REST 降级；策略是 bar 驱动（当前默认 15m），不要改成 tick 级实时框架
 - **分批(136)/部分平仓是仓位语义的一部分**：开/加/平会计全部在 `broker.py` 共享同步核心
   （open/add/close_position_math），纸盘与回测只调它，禁止各自再写一套；部分平仓按比例解锁保证金、
   记录 realized trade，剩余仓位按累计口径重算强平价；实盘分批/部分平仓一律以交易所对账为准（LiveBroker
@@ -82,11 +82,11 @@ store / api / static      持久化 / FastAPI / 看板
   部分平后按累计口径重算强平价、wallet 收支守恒（balance+locked+UPL = 初始 - 费用 + 已实现 + UPL）、
   部分平仓保留分批计划；ma_macd 行为不变量（tests/test_strategy.py）：二次确认才进首层、放量阻断、
   摆动击穿失效、止损优先于部分止盈且事件消费一次、保本/追踪只朝有利方向
-- **默认策略切换红线（2026-09-06 复核）**：修复"回测忽略 Signal(close)"潜伏 bug 后（历史研究均基于
-  不完整闭环，旧"rsi_revert 唯一全正"结论作废），rsi_revert 在 20U/5x/固定或缩放保证金下全负
-  （0.01~0.38x）；ma_macd 各变体 0.95~1.00x 未过 1.0，且 <5U 保证金时 136 首层不足最小单量 → 死区 0 交易。
-  **默认维持 rsi_revert 仅为占位，两候选均按"期望为负"对待，不得投入实盘真钱**；
-  研究表见 README「补充研究/追加」
+- **默认策略红线（2026-09-06 更新）**：修复"回测忽略 Signal(close)"潜伏 bug 后历史结论作废，
+  全部旧策略族（rsi_revert/donchian/trend_ema 等）在 20U/5x/固定或缩放保证金下 compounding 全负
+  （0.01~0.38x），已从代码删除；ma_macd 为唯一内置与默认策略（3y/近1y 约 0.997~0.998x，
+  仍未过 1.0 盈利红线，且 <5U 保证金时 136 首层不足最小单量 → 死区 0 交易）。
+  **一律按"期望为负"对待，只做纸盘前向验证，不得投入实盘真钱**；研究史见 README
 - **纸盘验证必须覆盖 WS 与 REST 两种 feed**：曾因 WS 收盘检测 bug，VPS 一天不开仓而本地（REST）回测正常——本地 REST 跑通不算完成，还需在直连 OKX 的环境（VPS）确认 WS 路径正常（判断标准：日志周期性出现"新 K 线"，且该时段回测有信号时能实际开仓）
 - **回测能开仓而实盘/纸盘不开仓 → 第一排查数据管道（K 线是否到达引擎），不是策略**
 - 实盘路径不做自动化测试，靠启动预检 + 纸盘先跑通验证

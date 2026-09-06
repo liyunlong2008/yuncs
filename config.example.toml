@@ -5,7 +5,7 @@ base_drawdown_pct = 30       # 起步（1.0x）回撤容忍：权益从峰值回
 tight_drawdown_pct = 10      # 盈利 ≥2x 后收紧到 10%：深盈利最多回吐 10% 就锁利
 tight_start_multiple = 1.5   # 容忍率从 1x→30% 线性收紧到该倍数→10%（约 1.25x 起出局线高于本金）
 duration_hours = 0           # 可选单轮时长上限；0 = 不限时
-timeframe = "15m"            # 策略 K 线周期（研究结论：均值回归类用 15m）
+timeframe = "15m"            # 策略 K 线周期（ma_macd 体系：15m 信号 + 1H 生命线）
 
 # ============ 交易所 ============
 [exchange]
@@ -19,22 +19,19 @@ maker_fee = 0.0002
 
 # ============ 风控 ============
 [risk]
-leverage = 5                # 开仓杠杆（研究结论：均值回归 5x 成立，10x+ 是悬崖）
-margin_per_trade = 5        # 单笔占用保证金 USDT
+leverage = 5                # 开仓杠杆（杠杆敏感性研究：5x 最优，10x 起单调变差）
+margin_per_trade = 5        # 单笔占用保证金 USDT（136 首层需 ≥ 最小 0.01 张，勿低于 5U@20U）
 max_notional = 1000         # 单仓名义价值上限 USDT（20u 账户的保护线）
 slippage_bps = 1.0          # 回测/纸盘市价单滑点（bps），纸盘实际成交价以盘口深度为准
 liquidation_buffer = 0.05   # 强平价缓冲（5%，即达到强平价前强制离场，防误差）
 
-# ============ 策略 ============
+# ============ 策略（唯一内置：ma_macd，旧策略族已删） ============
 [strategy]
-name = "rsi_revert"          # 研究结论默认：RSI(2)均值回归+SMA200趋势过滤
+name = "ma_macd"             # MA+MACD 两情相悦 × 1H 生命线 × 四位置 × 136 分仓 × 锁利离场
 [strategy.params]
-rsi_len = 2                # RSI 周期
-lo = 10                    # 超卖阈值：RSI<10 且价>SMA200 做多
-hi = 90                    # 超买阈值
-sma_len = 200              # 大趋势过滤均线
-exit_rsi = false           # 离场只看均线（让反弹跑到位）
-atr_sl_mult = 2.0          # ATR 硬止损倍数
+# 以下全部有默认值，通常无需配置；可调参数与含义见 app/strategy.py MaMacd 文档串
+# 常用实验开关：confirm(second/any)、vol_spike_mult、vol_exit_opposite、
+#               div_filter、d1_enable、zone_mult、stop_atr_mult、trail_atr_mult
 [storage]
 db_path = "data/bot.db"
 

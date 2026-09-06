@@ -4,6 +4,7 @@ import pytest
 from app.backtest import Backtest
 from app.config import Config
 from app.okx_feed import InstrumentSpec
+from app.strategy import MaMacd, Signal, Strategy
 
 SPEC = InstrumentSpec()  # 默认即 OKX ETH-USDT-SWAP 当前规格
 
@@ -76,38 +77,48 @@ def test_backtest_reports_end_of_data_round():
     assert bt.rounds[-1]["status"] == "end_of_data"
 
 
-def test_backtest_liquidation_on_crash():
-    """高杠杆 + 大 ATR 止损远离开仓价 + 单根暴跌 K 线 -> 强平保护触发。
+class _OpenHoldStrat(Strategy):
+    """在指定 bar 数开多后保持不动（无止损/止盈，专测资金费与强平分支）。"""
 
-    用 trend_ema（atr_sl_mult 放大让止损低于强平价），验证强平分支本身。
-    """
+    name = "_openhold"
+
+    def __init__(self, params):
+        super().__init__(params)
+        self.open_at = int(params.get("open_at", 30))
+
+    def on_bar(self, bar, ctx):
+        if not ctx.position.is_open and len(ctx.history) == self.open_at:
+            return Signal("open_long", "test 开多")
+        return Signal("none")
+
+
+def test_backtest_liquidation_on_crash():
+    """高杠杆 + 单根暴跌 K 线 -> 强平保护触发（假策略开多，验证强平分支）。"""
     cfg = make_cfg(challenge={"initial_balance": 20.0},
-                   risk={"leverage": 100, "margin_per_trade": 5},
-                   strategy={"name": "trend_ema", "params": {"atr_sl_mult": 10.0}})
+                   risk={"leverage": 100, "margin_per_trade": 5})
     prices = flat_series(80, 3000.0) + [3005.0, 3000.0] + flat_series(10, 3000.0)
     bars = synth_bars(prices)
     bars[82] = {"ts": bars[82]["ts"], "o": 3000.0, "h": 3001.0, "l": 2950.0, "c": 2955.0, "v": 10.0}
     bt = Backtest(cfg, bars, [])
+    bt.strategy = _OpenHoldStrat({"open_at": 50})
     bt.run()
     reasons = [t["reason"] for t in bt.trades]
     assert any(x == "liquidation" for x in reasons), f"trades={bt.trades}"
 
 
 def test_backtest_funding_deducted():
-    """持仓跨过资金费结算点 -> 按 OKX 公式扣费（缓慢上行，通道止损不触发）。"""
-    # 平盘 80 根 -> 跳涨 5U 触发突破开多 -> 缓步上行 200 根（止损线低于价格）
-    # 用 donchian 制造确定持仓（默认策略 rsi_revert 在此序列可能不开仓）
+    """持仓跨过资金费结算点 -> 按 OKX 公式扣费（假策略 81 根开多并持有）。"""
     prices = flat_series(80, 3000.0) + [3005.0] + [3005.0 + 0.2 * i for i in range(200)]
     bars = synth_bars(prices)
     funding = [{"ts": bars[0]["ts"] + 150 * 60_000, "rate": 0.0002}]
-    cfg = make_cfg(challenge={"initial_balance": 20.0},
-                   strategy={"name": "donchian", "params": {"entry_len": 30, "exit_len": 15}})
+    cfg = make_cfg(challenge={"initial_balance": 20.0})
     bt = Backtest(cfg, bars, funding)
+    bt.strategy = _OpenHoldStrat({"open_at": 60})   # idx60 决策 -> idx61 开盘成交并持有
     bt.run()
     assert bt.wallet.funding_paid > 0
-    # 默认杠杆 5x: 名义=min(5×5,1000)=25U -> 仓位约 0.008 ETH
-    # 资金费 = 0.008×标记价×0.0002（标记价≈3019）
-    assert bt.wallet.funding_paid == pytest.approx(0.008 * 3019 * 0.0002, rel=0.15)
+    # 5x: 名义=min(5×5,1000)=25U / 成交价≈3005 -> 仓位≈0.008319 ETH
+    # 资金费 = 0.008319 × 标记价(≈3019) × 0.0002
+    assert bt.wallet.funding_paid == pytest.approx(0.008319 * 3019 * 0.0002, rel=0.15)
 
 
 def test_backtest_requires_positive_initial():
@@ -115,21 +126,16 @@ def test_backtest_requires_positive_initial():
         Backtest(make_cfg(challenge={"initial_balance": 0.0}), synth_bars([3000.0] * 10), [])
 
 
-def test_backtest_keeps_same_strategy_code():
-    """回测与实盘用同一策略类（默认 rsi_revert，可通过配置切换）。"""
-    from app.strategy import DonchianBreakout, RsiRevert, TrendEma
+def test_backtest_uses_mamacd_by_default():
+    """回测默认与唯一内置策略 ma_macd 同源（工厂不再区分旧策略名）。"""
     cfg = make_cfg(challenge={"initial_balance": 20.0})
     bt = Backtest(cfg, synth_bars(flat_series(80, 3000.0) + uptrend(100, 3000.0)), [])
-    assert isinstance(bt.strategy, RsiRevert)
-    cfg2 = make_cfg(challenge={"initial_balance": 20.0}, strategy={"name": "trend_ema"})
-    assert isinstance(Backtest(cfg2, synth_bars([3000.0] * 100), []).strategy, TrendEma)
-    cfg3 = make_cfg(challenge={"initial_balance": 20.0}, strategy={"name": "donchian"})
-    assert isinstance(Backtest(cfg3, synth_bars([3000.0] * 100), []).strategy, DonchianBreakout)
+    assert isinstance(bt.strategy, MaMacd)
+    cfg2 = make_cfg(challenge={"initial_balance": 20.0}, strategy={"name": "任意旧名"})
+    assert isinstance(Backtest(cfg2, synth_bars([3000.0] * 100), []).strategy, MaMacd)
 
 
 # ---------- 136 分批与部分平仓的账本测试（fake 策略驱动回测） ----------
-
-from app.strategy import Signal, Strategy  # noqa: E402
 
 
 class _LegsStrat(Strategy):
